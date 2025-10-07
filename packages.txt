@@ -1,3 +1,2 @@
-# תלויות נדרשות לבנייה של Pillow בסביבות לינוקס
 libjpeg-dev
 zlib1g-dev
