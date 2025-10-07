@@ -1,8 +1,5 @@
 streamlit==1.38.0
 google-generativeai==0.8.3
-Pillow==10.3.0
-json-repair==0.16.2
-tenacity==8.2.3
-protobuf==4.25.3
-pandas==2.2.2
-requests==2.31.0.0
+Pillow==9.5.0
+pandas
+json-repair
