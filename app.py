@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# AI-Deal-Checker – גרסה סופית ומלאה עם דיבאג ל-Google Sheets
+# AI-Deal-Checker – גרסה סופית עם דיבאג קשיח ל-Google Sheets
+# כולל פרומפט מלא, 18 מקרי קצה, גרף מגמה, ותיקון שוק
 # ===========================================================
 
 import streamlit as st
@@ -20,31 +21,44 @@ api_key = st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
-# ---------- חיבור ל-Google Sheets עם דיבאג ----------
+# ---------- חיבור ל-Google Sheets עם דיבאג קשיח ----------
 SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID")
 SERVICE_ACCOUNT_JSON = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 sheet = None
 
 st.write("🔍 מתחיל בדיקת חיבור ל-Google Sheets...")
+
 try:
     if not SHEET_ID:
         raise ValueError("❌ חסר GOOGLE_SHEET_ID ב-secrets.toml")
     if not SERVICE_ACCOUNT_JSON:
         raise ValueError("❌ חסר GOOGLE_SERVICE_ACCOUNT_JSON ב-secrets.toml")
 
-    required_fields = ["type", "private_key", "client_email", "token_uri"]
-    missing = [f for f in required_fields if f not in SERVICE_ACCOUNT_JSON]
-    if missing:
-        raise ValueError(f"⚠️ חסרים שדות במפתח השירות: {missing}")
-
     creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON, scopes=SCOPES)
     client = gspread.authorize(creds)
+
+    st.write(f"📄 מנסה לפתוח את הגיליון לפי ה-ID: {SHEET_ID}")
     sheet = client.open_by_key(SHEET_ID).sheet1
+
     st.success("✅ התחברות ל-Google Sheets הצליחה!")
 
-except Exception:
-    st.error("❌ שגיאה בעת ניסיון להתחבר ל-Google Sheets:")
+except gspread.exceptions.APIError as api_err:
+    st.error("❌ שגיאת API מגוגל:")
+    try:
+        err_json = api_err.response.json()
+        st.code(json.dumps(err_json, indent=2, ensure_ascii=False))
+    except Exception:
+        st.code(str(api_err))
+    sheet = None
+
+except gspread.exceptions.SpreadsheetNotFound as nf_err:
+    st.error("❌ SpreadsheetNotFound – כנראה שה־Service Account לא שותף לקובץ או ה-ID שגוי.")
+    st.code(str(nf_err))
+    sheet = None
+
+except Exception as e:
+    st.error("❌ שגיאה כללית בעת ניסיון להתחבר ל-Google Sheets:")
     st.code(traceback.format_exc())
     sheet = None
 
@@ -309,9 +323,5 @@ if st.button("חשב ציון כדאיות"):
             st.caption("© 2025 Car Advisor AI – גרסה סופית עם Google Sheets, תיקון שוק, מקרי קצה וגרף מגמה")
 
         except Exception:
-            st.error("❌ שגיאה בעיבוד הנתונים.")
-            st.code(traceback.format_exc())
-
-        except Exception:
-            st.error("❌ שגיאה בעיבוד הנתונים.")
+            st.error("❌ שגיאה בעיבוד הנתונים:")
             st.code(traceback.format_exc())
