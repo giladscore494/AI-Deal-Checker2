@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker (U.S.) — v9.2 FULL Pro Prompt
-# Gemini 2.5 Pro | Live Web Search Cross-Validation | VIN-based stabilization
-# Styled visual history (cards) instead of raw DataFrame
-# Google Sheets sync (optional)
+# 🚗 AI Deal Checker (U.S.) — v9.3 FULL Pro
+# Gemini 2.5 Pro | (claimed) web cross-validation | VIN/model stabilization
+# Styled visual history (cards), CSV export, Google Sheets (optional)
+# Adds: robust type coercion, raw JSON viewer, clear history, safer Sheets init
 # ===========================================================
 
-import os, re, json, time
+import os, re, json, time, math
 from datetime import datetime
 import pandas as pd
 import streamlit as st
@@ -23,7 +23,7 @@ except Exception:
     Credentials = None
 
 # ---------------------- App Setup --------------------------
-st.set_page_config(page_title="AI Deal Checker (U.S.) — v9.2", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="AI Deal Checker (U.S.) — v9.3", page_icon="🚗", layout="centered")
 
 # Minimal CSS for meters/pills/cards
 st.markdown("""
@@ -50,29 +50,67 @@ GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
 SERVICE_JSON = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON", None)
 LOCAL_FILE = "deal_history_us.json"
+HISTORY_LIMIT = 500  # cap local history to avoid infinite growth
 
 if not GEMINI_KEY:
     st.error("Missing GEMINI_API_KEY in st.secrets.")
     st.stop()
 
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel("gemini-2.5-pro")
+model = genai.GenerativeModel(
+    "gemini-2.5-pro",
+    generation_config={"temperature": 0.3, "max_output_tokens": 2048},
+)
+
+# ---------------------- Utility: Coercion/Format ----------
+def _to_float(x, default=0.0):
+    if x is None: return default
+    if isinstance(x, (int, float)) and not isinstance(x, bool): return float(x)
+    if isinstance(x, str):
+        s = x.strip().replace(",", "")
+        m = re.findall(r"-?\d+\.?\d*", s)
+        if m:
+            try: return float(m[0])
+            except Exception: return default
+    return default
+
+def _to_int(x, default=0):
+    f = _to_float(x, float(default))
+    try:
+        if math.isnan(f) or math.isinf(f): return default
+    except Exception:
+        pass
+    return int(round(f))
+
+def _pct0_100(x):
+    v = _to_float(x, 0.0)
+    return max(0.0, min(100.0, v))
+
+def _fmt_money_usd(x):
+    v = _to_int(x, 0)
+    return f"${v:,}"
+
+def _fmt_int(x):
+    v = _to_int(x, 0)
+    return f"{v:,}"
 
 # ---------------------- Google Sheets ----------------------
 sheet = None
 if SHEET_ID and SERVICE_JSON and gspread and Credentials:
     try:
+        # SERVICE_JSON may come as dict or JSON string in secrets
+        sa_info = SERVICE_JSON if isinstance(SERVICE_JSON, dict) else json.loads(SERVICE_JSON)
         creds = Credentials.from_service_account_info(
-            SERVICE_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            sa_info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SHEET_ID).sheet1
         st.toast("✅ Connected to Google Sheets")
-    except Exception:
-        st.warning("⚠️ Google Sheets connection failed")
+    except Exception as e:
+        st.warning(f"⚠️ Google Sheets connection failed: {e}")
 
 # ---------------------- Persistence ------------------------
-def load_history():
+def _read_local_history():
     if os.path.exists(LOCAL_FILE):
         try:
             with open(LOCAL_FILE, "r", encoding="utf-8") as f:
@@ -81,13 +119,24 @@ def load_history():
             return []
     return []
 
-def save_history(entry):
-    # local
+def _write_local_history(all_rows):
     try:
-        data = load_history()
-        data.append(entry)
         with open(LOCAL_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(all_rows, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def load_history():
+    return _read_local_history()
+
+def save_history(entry):
+    # local with cap
+    try:
+        data = _read_local_history()
+        data.append(entry)
+        if len(data) > HISTORY_LIMIT:
+            data = data[-HISTORY_LIMIT:]
+        _write_local_history(data)
     except Exception:
         pass
     # sheets
@@ -96,14 +145,23 @@ def save_history(entry):
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             fa = entry.get("from_ad", {}) or {}
             row = [
-                ts, fa.get("brand",""), fa.get("model",""), fa.get("year",""),
-                fa.get("price_usd",""), fa.get("mileage_mi",""),
-                entry.get("deal_score",""), entry.get("classification",""),
-                entry.get("risk_level",""), entry.get("roi_estimate_24m",""),
-                entry.get("seller_trust_index",""), entry.get("reliability_score_web",""),
-                entry.get("regional_demand_index",""), entry.get("confidence_level",""),
-                entry.get("depreciation_two_year_pct",""), entry.get("insurance_cost_band",""),
-                entry.get("climate_suitability",""), entry.get("web_search_performed",""),
+                ts,
+                fa.get("brand",""), fa.get("model",""), fa.get("year",""),
+                fa.get("trim",""), fa.get("engine",""), fa.get("transmission",""),
+                fa.get("drivetrain",""),
+                _to_int(fa.get("mileage_mi",0)),
+                _to_int(fa.get("price_usd",0)),
+                fa.get("vin",""), fa.get("zip",""),
+                (fa.get("seller_type","") or ""),
+                _to_int(entry.get("deal_score",0)),
+                entry.get("classification",""),
+                entry.get("risk_level",""),
+                _to_float(entry.get("roi_estimate_24m",0.0)),
+                _to_int(entry.get("seller_trust_index",0)),
+                _to_int(entry.get("reliability_score_web",0)),
+                _to_int(entry.get("regional_demand_index",0)),
+                _to_float(entry.get("confidence_level",0.0)),
+                bool(entry.get("web_search_performed", False)),
                 entry.get("short_verdict","")
             ]
             sheet.append_row(row, value_input_option="USER_ENTERED")
@@ -113,19 +171,19 @@ def save_history(entry):
 # ---------------------- Stabilization ----------------------
 def get_avg_score(identifier: str, model_name: str):
     """Average score for specific VIN (if given) else by model name."""
-    hist = load_history()
+    hist = _read_local_history()
     scores = []
     for h in hist:
         fa = h.get("from_ad", {}) or {}
-        if identifier and fa.get("vin","").lower() == identifier.lower():
+        if identifier and fa.get("vin","").lower() == (identifier or "").lower():
             if isinstance(h.get("deal_score"), (int,float)):
-                scores.append(h["deal_score"])
+                scores.append(_to_float(h["deal_score"]))
         elif not identifier and model_name and model_name.lower() in (fa.get("model","") or "").lower():
             if isinstance(h.get("deal_score"), (int,float)):
-                scores.append(h["deal_score"])
+                scores.append(_to_float(h["deal_score"]))
     return round(sum(scores)/len(scores),2) if scores else None
 
-# ---------------------- Prompt (v9.2 Enhanced) -------------
+# ---------------------- Prompt (v9.3 Enhanced) -------------
 STRICT_SCHEMA_EXAMPLE = """{
   "from_ad": {
     "brand": "Toyota",
@@ -162,7 +220,8 @@ STRICT_SCHEMA_EXAMPLE = """{
   "depreciation_two_year_pct": 18,
   "insurance_cost_band": "avg",
   "climate_suitability": "Good",
-  "regional_demand_index": 73
+  "regional_demand_index": 73,
+  "short_verdict": "..."
 }"""
 
 def build_prompt(ad: str, extra: str):
@@ -246,23 +305,32 @@ def meter(label, value, suffix=""):
     st.markdown(f"<div class='progress'><div class='{css}' style='width:{int(v)}%'></div></div>", unsafe_allow_html=True)
 
 def pill(label, level):
-    lvl = (level or "").strip().lower()
-    cls = 'ok' if lvl in ('good','low','high') else ('warn' if lvl in ('avg','moderate','medium') else 'bad')
+    lvl = (str(level) or "").strip().lower()
+    cls = 'ok' if lvl in ('good','low','high') else ('warn' if lvl in ('avg','average','moderate','medium') else 'bad')
     st.markdown(f"<span class='pill {cls}'>{label}</span>", unsafe_allow_html=True)
 
 # ---------------------- UI -------------------------------
-st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v9.2")
-st.caption("AI-powered used-car deal analysis with live web cross-validation, VIN stability & Sheets sync.")
+st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v9.3")
+st.caption("AI-powered used-car deal analysis with cross-validation prompt, VIN stability & Sheets sync. (Note: web search depends on the model’s browsing capabilities.)")
 
+# Controls row
 ad_text = st.text_area("Paste the listing text:", height=220, placeholder="Paste the Craigslist / FB Marketplace / Cars.com ad…")
 images = st.file_uploader("Upload listing photos (optional):", type=["jpg","jpeg","png"], accept_multiple_files=True)
 c1,c2,c3 = st.columns(3)
 with c1: vin = st.text_input("VIN (optional)")
 with c2: zipc = st.text_input("ZIP (optional)")
 with c3: seller = st.selectbox("Seller type", ["","private","dealer"])
+c4,c5 = st.columns(2)
+with c4:
+    show_raw_json = st.toggle("Show raw JSON output", value=False, help="Display the model’s JSON response.")
+with c5:
+    if st.button("🗑️ Clear local history"):
+        _write_local_history([])
+        st.success("Local history cleared.")
 
+# Analyze button
 if st.button("Analyze Deal", use_container_width=True, type="primary"):
-    if not ad_text.strip():
+    if not (ad_text or "").strip():
         st.error("Please paste the listing text.")
         st.stop()
 
@@ -278,12 +346,12 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         except Exception:
             pass
 
-    with st.spinner("Analyzing with Gemini 2.5 Pro (live web search)…"):
+    with st.spinner("Analyzing with Gemini 2.5 Pro…"):
         data, last_err = None, None
         for attempt in range(3):
             try:
                 resp = model.generate_content(inputs, request_options={"timeout": 120})
-                data = parse_json_strict(resp.text)
+                data = parse_json_strict(getattr(resp, "text", "") or "")
                 break
             except Exception as e:
                 last_err = str(e)
@@ -296,41 +364,47 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
 
     # Stabilization vs VIN/model average
     fa = data.get("from_ad", {}) or {}
-    vin_id = fa.get("vin","") or ""
-    model_name = fa.get("model","") or ""
+    vin_id = (fa.get("vin","") or "").strip()
+    model_name = (fa.get("model","") or "").strip()
     avg = get_avg_score(vin_id, model_name)
-    if avg and isinstance(data.get("deal_score"), (int,float)):
-        diff = data["deal_score"] - avg
+    if avg is not None and isinstance(data.get("deal_score"), (int,float)):
+        diff = _to_float(data["deal_score"]) - avg
         if abs(diff) >= 10:
-            data["deal_score"] = int((data["deal_score"] + avg) / 2)
+            data["deal_score"] = int(round((_to_float(data["deal_score"]) + avg) / 2.0))
             sv = (data.get("short_verdict","") or "").strip()
-            data["short_verdict"] = (sv + f" ⚙️ Stabilized vs VIN/model avg ({avg}).").strip()
+            data["short_verdict"] = (sv + f" ⚙️ Stabilized vs VIN/model avg ({round(avg,1)}).").strip()
 
     save_history(data)
 
     # -------- Display --------
     st.divider()
-    score = int(data.get("deal_score", 0))
+    score = _to_int(data.get("deal_score", 0))
     color = "#16a34a" if score >= 80 else ("#f59e0b" if score >= 60 else "#dc2626")
     st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {score}/100</h2>", unsafe_allow_html=True)
 
-    conf = float(data.get("confidence_level", 0) or 0) * 100
+    # Confidence (expects 0–1); if it's already 0–100 the _pct0_100 keeps it reasonable
+    conf_raw = data.get("confidence_level", 0)
+    conf = _pct0_100(_to_float(conf_raw) * (100.0 if _to_float(conf_raw) <= 1.0 else 1.0))
     meter("Confidence", conf, "%")
 
     if data.get("web_search_performed"):
-        st.success("🔎 Live web search cross-validation performed.")
+        st.success("🔎 Live web search cross-validation claimed by model.")
         xval = data.get("cross_validation_result","")
         if xval:
             st.caption(xval)
     else:
-        st.warning("⚠️ No live web search detected — AI relied on internal knowledge.")
+        st.warning("⚠️ No live web search detected — the model may have relied on prior knowledge.")
 
     st.subheader("Summary")
     st.write(data.get("short_verdict",""))
 
     st.subheader("Listing")
-    st.write(f"**{fa.get('brand','')} {fa.get('model','')} {fa.get('year','')} {fa.get('trim','') or ''}**")
-    st.write(f"**Price:** ${fa.get('price_usd',0):,}  |  **Miles:** {fa.get('mileage_mi',0):,}")
+    brand = fa.get("brand","") or ""
+    model_name_disp = fa.get("model","") or ""
+    year = fa.get("year","") or ""
+    trim = fa.get("trim","") or ""
+    st.write(f"**{brand} {model_name_disp} {year} {trim}**")
+    st.write(f"**Price:** {_fmt_money_usd(fa.get('price_usd',0))}  |  **Miles:** {_fmt_int(fa.get('mileage_mi',0))}")
     st.write(f"**Seller:** {fa.get('seller_type','') or 'n/a'} | **ZIP:** {fa.get('zip','') or 'n/a'} | **VIN:** {fa.get('vin','') or 'n/a'}")
 
     st.subheader("Emphasized Signals")
@@ -349,9 +423,13 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
             for i in issues:
                 st.markdown(f"- {i}")
 
+    if show_raw_json:
+        st.subheader("Raw JSON")
+        st.code(json.dumps(data, ensure_ascii=False, indent=2), language="json")
+
     # -------- Styled History (cards) + CSV export ----------
     st.divider()
-    st.caption("© 2025 AI Deal Checker — U.S. Edition (Pro) v9.2. AI opinion only; verify independently.")
+    st.caption("© 2025 AI Deal Checker — U.S. Edition (Pro) v9.3. AI opinion only; verify independently.")
 
     hist = load_history()
     if hist:
@@ -361,13 +439,15 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
             fa_h = h.get("from_ad", {}) or {}
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown(f"**{fa_h.get('brand','')} {fa_h.get('model','')} {fa_h.get('year','')}** — {(fa_h.get('seller_type','') or 'n/a').title()} seller")
-            s = int(h.get("deal_score",0))
+            s = _to_int(h.get("deal_score",0))
             col = "#16a34a" if s>=80 else ("#f59e0b" if s>=60 else "#dc2626")
             st.markdown(f"<h4 style='color:{col};margin:4px 0;'>Deal Score: {s}/100</h4>", unsafe_allow_html=True)
 
             meter("Reliability (web)", h.get("reliability_score_web",0), "/100")
             meter("Seller Trust", h.get("seller_trust_index",0), "/100")
-            meter("Confidence", float(h.get("confidence_level",0))*100, "%")
+            conf_hist = h.get("confidence_level",0)
+            conf_hist_val = _pct0_100(_to_float(conf_hist) * (100.0 if _to_float(conf_hist) <= 1.0 else 1.0))
+            meter("Confidence", conf_hist_val, "%")
             meter("Regional Demand", h.get("regional_demand_index",0), "/100")
 
             st.markdown("<div style='margin-top:6px;'>", unsafe_allow_html=True)
@@ -379,6 +459,9 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
             st.markdown(f"<small class='muted'>Recorded: {fa_h.get('zip','n/a')} • {h.get('classification','')} • ROI: {h.get('roi_estimate_24m','')}%</small>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
-        df = pd.DataFrame(hist)
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download History CSV", data=csv, file_name="ai_deal_history_us.csv")
+        try:
+            df = pd.DataFrame(hist)
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Download History CSV", data=csv, file_name="ai_deal_history_us.csv")
+        except Exception:
+            pass
