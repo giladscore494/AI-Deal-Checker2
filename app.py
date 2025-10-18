@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker (U.S.) - v9.3.2 Full Visual & Textual Build
-# Gemini 2.5 Pro | Text + Image Reasoning | Live Cross-Validation
+# 🚗 AI Deal Checker (U.S.) - v9.3.3 Full Cross-Validation Build
+# Gemini 2.5 Pro | Text + Image | Rust-Belt Risk + Climate + Insurance
 # ===========================================================
 
 import os, re, json, time, io
@@ -21,9 +21,9 @@ except Exception:
     Credentials = None
 
 # ---------------------- App Setup --------------------------
-st.set_page_config(page_title="AI Deal Checker (U.S.) v9.3.2", page_icon="🚗", layout="centered")
-st.title("🚗 AI Deal Checker - U.S. Edition (Pro) v9.3.2")
-st.caption("AI-powered used-car deal analysis with live web & visual cross-validation (Gemini 2.5 Pro).")
+st.set_page_config(page_title="AI Deal Checker (U.S.) v9.3.3", page_icon="🚗", layout="centered")
+st.title("🚗 AI Deal Checker - U.S. Edition (Pro) v9.3.3")
+st.caption("AI-powered used-car deal analysis with visual + web cross-validation (Gemini 2.5 Pro).")
 
 # ---------------------- CSS --------------------------
 st.markdown("""
@@ -71,6 +71,28 @@ if SHEET_ID and SERVICE_JSON and gspread and Credentials:
     except Exception as e:
         st.warning(f"⚠️ Google Sheets connection failed: {e}")
 
+# ---------------------- Rust-Belt Risk Helper ----------------------
+RUST_BELT_STATES = ["OH","MI","PA","IL","NY","WI","MN"]
+
+def rust_belt_risk(zip_code:str=""):
+    """Estimate corrosion risk based on region (Rust Belt heuristic)."""
+    if not zip_code:
+        return 0
+    zip_prefix = str(zip_code)[:3]
+    # simulate region-based risk weight
+    for state in RUST_BELT_STATES:
+        if state.lower() in zip_code.lower():
+            return 10
+    try:
+        z = int(zip_prefix)
+        if 430 <= z <= 499:  # Midwest + Great Lakes zones
+            return 10
+        if 500 <= z <= 599:  # Northern plains
+            return 6
+    except Exception:
+        pass
+    return 0
+
 # ---------------------- Save to Sheet ----------------------
 def save_to_sheet(entry):
     if not sheet:
@@ -111,8 +133,10 @@ STRICT_SCHEMA_EXAMPLE = """{
 "benchmarks":{"fair_price_range_usd":[18000,20000],"visual_condition":"Good"},
 "deal_score":87,
 "classification":"Great Deal",
-"reasoning":"Price 8% below fair range, clean title, excellent visual condition, low mileage, high reliability score, projected ROI 7.2% over 24 months.",
+"reasoning":"Price 8% below market, clean title, good visual condition, no rust signs, average insurance cost, suitable for warm climates, ROI +7% in 24 months.",
 "risk_level":"Low",
+"insurance_cost_band":"avg",
+"climate_suitability":"Good",
 "roi_estimate_24m":7.2,
 "seller_trust_index":80,
 "confidence_level":0.95,
@@ -121,32 +145,24 @@ STRICT_SCHEMA_EXAMPLE = """{
 
 def build_prompt(ad: str, extra: str):
     return f"""
-You are an AI automotive analyst specializing in used-car evaluation.
+You are an expert automotive analyst for the U.S. used-car market.
 
-TASK:
-Perform a full multimodal (text + image) analysis of the car listing below.
+OBJECTIVE:
+Analyze the vehicle listing below (text + photos). Return a detailed JSON result only.
 
-Cross-validate using up-to-date 2023–2025 U.S. market data (Edmunds, KBB, IIHS, Cars.com, RepairPal).
-Do NOT cite sources directly.
-
-INSTRUCTIONS:
-1. Analyze both the **text description** and the **uploaded photos**.
-2. From photos, estimate:
-   - Exterior condition (scratches, dents, paint quality)
-   - Tire wear and interior cleanliness
-   - Signs of rust, flood damage, or repaint
-   - Whether it looks dealer-prepped or private-sale used
-3. From text, evaluate:
-   - Price vs. fair market range
-   - Mileage and ownership history
-   - Title type (clean, rebuilt, salvage)
-   - Brand reliability, maintenance trend, ROI outlook
-4. Combine image + text insights into a unified reasoning paragraph.
-   Example: “Price 8% below KBB fair value, one-owner clean title, tires look new, exterior well-kept, strong ROI outlook (+7% over 2y).”
-5. Output JSON only, exactly in this structure:
+TASKS:
+1. Evaluate price vs. 2023–2025 fair market range (Edmunds, KBB, Cars.com, RepairPal — internal data only).
+2. Evaluate reliability, ROI, maintenance trend, and resale outlook.
+3. Evaluate **visual cues** from uploaded photos:
+   - Exterior condition (scratches, dents, repaint)
+   - Interior cleanliness and seat condition
+   - Tire wear, rust traces, headlight oxidation
+   - General presentation (dealer-prepped vs. private sale)
+4. Evaluate regional risk (rust/corrosion) based on ZIP/state (Rust Belt = OH, MI, PA, IL, NY, WI, MN).
+5. Estimate **insurance_cost_band** ("low"/"avg"/"high") and **climate_suitability** ("Good"/"Moderate"/"Poor").
+6. Write a clear "reasoning" paragraph explaining all factors quantitatively (e.g., "Price 9% below market, minor scratches, Midwest region rust risk -5 pts, strong reliability +ROI offset").
+7. Return JSON only, exactly like this:
 {STRICT_SCHEMA_EXAMPLE}
-
-Make the reasoning quantitative, detailed, and natural-language readable.
 
 INPUT (Ad):
 \"\"\"{ad}\"\"\"{extra}
@@ -190,7 +206,7 @@ ad_text = st.text_area("Paste the listing text:", height=220, placeholder="Paste
 images = st.file_uploader("Upload listing photos (optional):", type=["jpg","jpeg","png"], accept_multiple_files=True)
 c1,c2,c3 = st.columns(3)
 with c1: vin = st.text_input("VIN (optional)")
-with c2: zipc = st.text_input("ZIP (optional)")
+with c2: zipc = st.text_input("ZIP or State (e.g., 44105 or OH)")
 with c3: seller = st.selectbox("Seller type", ["","private","dealer"])
 
 if st.button("Analyze Deal", use_container_width=True, type="primary"):
@@ -200,10 +216,14 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
 
     extra = ""
     if vin: extra += f"\nVIN: {vin}"
-    if zipc: extra += f"\nZIP: {zipc}"
+    if zipc: extra += f"\nZIP or State: {zipc}"
     if seller: extra += f"\nSeller type: {seller}"
 
-    # Build multimodal input parts
+    rust_penalty = rust_belt_risk(zipc)
+    if rust_penalty:
+        extra += f"\n⚠️ Note: region is part of Rust Belt — apply corrosion risk factor ({rust_penalty} pts)."
+
+    # Build multimodal parts
     parts = [{"text": build_prompt(ad_text, extra)}]
     if images:
         for img in images:
@@ -241,8 +261,6 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
 
     if data.get("web_search_performed"):
         st.success("🔎 Live web & visual cross-validation performed.")
-        if data.get("cross_validation_result"):
-            st.caption(data["cross_validation_result"])
     else:
         st.warning("⚠️ No live web search detected — AI relied on internal knowledge.")
 
@@ -254,11 +272,14 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     st.subheader("Listing Details")
     st.write(f"**{fa.get('brand','')} {fa.get('model','')} {fa.get('year','')}**")
     st.write(f"**Price:** ${fa.get('price_usd',0):,} | **Miles:** {fa.get('mileage_mi',0):,}")
-    st.write(f"**Seller:** {fa.get('seller_type','') or 'n/a'} | **ZIP:** {fa.get('zip','') or 'n/a'} | **VIN:** {fa.get('vin','') or 'n/a'}")
+    st.write(f"**Seller:** {fa.get('seller_type','') or 'n/a'} | **ZIP/State:** {fa.get('zip','') or zipc or 'n/a'} | **VIN:** {fa.get('vin','') or 'n/a'}")
 
     st.subheader("Risk & Context")
     pill(f"Risk: {data.get('risk_level','')}", data.get("risk_level"))
     pill(f"Insurance: {data.get('insurance_cost_band','')}", data.get("insurance_cost_band"))
     pill(f"Climate: {data.get('climate_suitability','')}", data.get("climate_suitability"))
 
-    st.caption("© 2025 AI Deal Checker - U.S. Edition (Pro) v9.3.2. AI opinion only; verify independently.")
+    if rust_penalty:
+        st.markdown(f"<small class='muted'>Rust-belt penalty applied: −{rust_penalty} points due to regional corrosion risk.</small>", unsafe_allow_html=True)
+
+    st.caption("© 2025 AI Deal Checker - U.S. Edition (Pro) v9.3.3. AI opinion only; verify independently.")
