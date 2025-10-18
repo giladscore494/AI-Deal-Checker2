@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# AI Deal Checker (U.S.) – v8 FULL • Pro Visual + Cross-Validation
+# AI Deal Checker (U.S.) — v8.3 FULL • Pro Visual + Cross-Validation
 # • Gemini 2.5 Pro
-# • "Internet Cross-Validation" enforced in prompt (no sources list in output)
-# • ROI (24m), Seller Trust Index, Depreciation Trend (2y), MPG, Insurance, Climate
-# • Strict JSON schema + retry loop (up to 3 attempts) + robust JSON parsing
+# • Enforced Internet Cross-Validation (no sources list in output)
+# • ROI (24m), Seller Trust Index, Depreciation (2y), MPG, Insurance, Climate
+# • Strict JSON schema + retry loop + robust JSON parsing
 # • Local JSON history + optional Google Sheets append
 # • Visual dashboard (progress bars + pills) for ALL key parameters
 # ===========================================================
 
-import os, re, json, time, traceback
+import os, re, json, time
 from datetime import datetime
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 from json_repair import repair_json
-# Optional Google Sheets (if secrets configured)
+
+# Optional Google Sheets
 try:
     import gspread
     from google.oauth2.service_account import Credentials
@@ -24,32 +25,33 @@ except Exception:
     Credentials = None
 
 # ---------------------- App Config -------------------------
-st.set_page_config(page_title="AI Deal Checker (U.S.) — v8 FULL", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="AI Deal Checker (U.S.) — v8.3 FULL", page_icon="🚗", layout="centered")
 st.markdown("""
 <style>
-:root { --ink:#0f172a; --muted:#64748b; --ok:#16a34a; --warn:#f59e0b; --bad:#dc2626; --accent:#2563eb; }
-* { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial; }
-h1,h2,h3,h4 { color:var(--ink); font-weight:700; }
-small,.muted{ color:var(--muted); }
-div.block-container { padding-top:1rem; }
-hr{ border:none;height:1px;background:#e5e7eb;margin:18px 0;}
-.card { border:1px solid #e5e7eb;border-radius:14px;padding:16px;background:#fff; }
-.progress {height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden;}
-.fill-ok {height:100%;background:var(--ok);transition:width .6s;}
-.fill-warn {height:100%;background:var(--warn);transition:width .6s;}
-.fill-bad {height:100%;background:var(--bad);transition:width .6s;}
-.metric { display:flex; align-items:center; justify-content:space-between; margin:8px 0 6px; }
-.metric .label { font-weight:600; color:#111827; }
-.metric .value { font-variant-numeric: tabular-nums; font-weight:700; }
-.pill { display:inline-flex; align-items:center; gap:.4rem; padding:.35rem .6rem; border-radius:999px; font-weight:600; }
-.pill.ok { background:#ecfdf5; color:#065f46; }
-.pill.warn { background:#fffbeb; color:#92400e; }
-.pill.bad { background:#fef2f2; color:#991b1b; }
-.grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px;}
-@media (max-width: 860px){ .grid {grid-template-columns:1fr;} }
-.kv { display:flex; gap:.5rem; flex-wrap:wrap;}
-.kv span { background:#f3f4f6;border-radius:8px;padding:4px 8px; }
-.small { font-size:.9rem; color:#374151; }
+:root{--ink:#0f172a;--muted:#64748b;--ok:#16a34a;--warn:#f59e0b;--bad:#dc2626;--accent:#2563eb;}
+*{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans","Helvetica Neue",Arial}
+h1,h2,h3,h4{color:var(--ink);font-weight:700}
+small,.muted{color:var(--muted)}
+div.block-container{padding-top:1rem}
+hr{border:none;height:1px;background:#e5e7eb;margin:18px 0}
+.card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;background:#fff}
+.progress{height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden}
+.fill-ok{height:100%;background:var(--ok);transition:width .6s}
+.fill-warn{height:100%;background:var(--warn);transition:width .6s}
+.fill-bad{height:100%;background:var(--bad);transition:width .6s}
+.metric{display:flex;align-items:center;justify-content:space-between;margin:8px 0 6px}
+.metric .label{font-weight:600;color:#111827}
+.metric .value{font-variant-numeric:tabular-nums;font-weight:700}
+.pill{display:inline-flex;align-items:center;gap:.4rem;padding:.35rem .6rem;border-radius:999px;font-weight:600}
+.pill.ok{background:#ecfdf5;color:#065f46}
+.pill.warn{background:#fffbeb;color:#92400e}
+.pill.bad{background:#fef2f2;color:#991b1b}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+.kv{display:flex;gap:.5rem;flex-wrap:wrap}
+.kv span{background:#f3f4f6;border-radius:8px;padding:4px 8px}
+.small{font-size:.9rem;color:#374151}
+.badge{display:inline-block;border-radius:10px;padding:4px 8px;background:#eef2ff;color:#3730a3;font-weight:700}
 </style>
 """, unsafe_allow_html=True)
 
@@ -64,7 +66,6 @@ if not GEMINI_KEY:
     st.error("Missing GEMINI_API_KEY in st.secrets.")
     st.stop()
 
-# Model: Gemini 2.5 Pro
 MODEL_NAME = "gemini-2.5-pro"
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel(MODEL_NAME)
@@ -100,7 +101,7 @@ def save_to_history(entry: dict):
             json.dump(data, f, ensure_ascii=False, indent=2)
         if sheet:
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fa = entry.get("from_ad", {})
+            fa = entry.get("from_ad", {}) or {}
             row = [
                 ts,
                 fa.get("brand",""), fa.get("model",""), fa.get("year",""),
@@ -126,7 +127,7 @@ def get_model_avg_us(brand: str, model_name: str):
         h.get("deal_score") for h in hist
         if isinstance(h.get("deal_score"), (int,float))
         and h.get("from_ad", {}).get("brand","").lower()==brand.lower()
-        and model_name.lower() in h.get("from_ad", {}).get("model","").lower()
+        and model_name.lower() in (h.get("from_ad", {}).get("model","") or "").lower()
     ]
     return round(sum(scores)/len(scores),2) if scores else None
 
@@ -234,7 +235,7 @@ INTERNET CROSS-VALIDATION REQUIREMENT:
 • Compare web findings against the ad data and your AI estimation.
 • Output fields MUST include:
   "web_search_performed": true/false,
-  "cross_validation_result": ""  (short text on alignment vs live data)
+  "cross_validation_result": "" (short text on alignment vs live data)
 • Do NOT list the specific sources in the JSON.
 
 EDGE-CASE SCORING (apply cumulatively; cap ±40 total adjustment):
@@ -263,34 +264,30 @@ Ad text:
 Return ONLY the JSON object.
 """.strip()
 
-# ---------------------- JSON Parsing (strict) --------------
+# ---------------------- JSON Parsing -----------------------
 def parse_json_strict(raw: str):
-    """Normalize wrappers and structural braces only; no business self-filling."""
     raw = (raw or "").strip()
     if not raw:
         raise ValueError("Empty response")
 
-    # strip accidental code fences
+    # strip code fences
     if raw.startswith("```"):
         raw = re.sub(r"^```(json)?", "", raw, flags=re.IGNORECASE).strip()
     if raw.endswith("```"):
         raw = raw[:-3].strip()
 
-    # close missing braces/brackets symmetrically
-    open_braces, close_braces = raw.count("{"), raw.count("}")
-    if close_braces < open_braces:
-        raw += "}" * (open_braces - close_braces)
-    open_brackets, close_brackets = raw.count("["), raw.count("]")
-    if close_brackets < open_brackets:
-        raw += "]" * (open_brackets - open_brackets)
+    # balance braces/brackets
+    ob, cb = raw.count("{"), raw.count("}")
+    if cb < ob: raw += "}" * (ob - cb)
+    osq, csq = raw.count("["), raw.count("]")
+    if csq < osq: raw += "]" * (osq - csq)
 
-    # direct parse → if fail, cut to last brace → if fail, deep repair
     try:
         return json.loads(raw)
     except Exception:
         last = max(raw.rfind("}"), raw.rfind("]"))
         if last > 0:
-            cut = raw[: last + 1]
+            cut = raw[:last+1]
             try:
                 return json.loads(cut)
             except Exception:
@@ -300,11 +297,6 @@ def parse_json_strict(raw: str):
 
 # ---------------------- UI Helpers ------------------------
 def meter(label: str, value: float, suffix: str = "", invert: bool = False):
-    """
-    Render emphasized bar for a metric.
-    value: 0-100 (clamped)
-    invert=True means 'lower is better' (we invert fill for color heuristic) — here we just note in label.
-    """
     try:
         v = float(value)
     except Exception:
@@ -315,13 +307,19 @@ def meter(label: str, value: float, suffix: str = "", invert: bool = False):
     st.markdown(f"<div class='metric'><span class='label'>{label}</span><span class='value'>{int(v)}{suffix}</span></div>", unsafe_allow_html=True)
     st.markdown(f"<div class='progress'><div class='{cls}' style='width:{int(v)}%'></div></div>", unsafe_allow_html=True)
 
-def pill(label: str, level: str):
-    level = (level or "").strip().lower()
-    cls = 'ok' if level in ('low','good','high') else ('warn' if level in ('avg','moderate','medium') else 'bad')
-    st.markdown(f"<span class='pill {cls}'>{label}</span>", unsafe_allow_html=True)
+def pill_text(text: str, level_hint: str = "warn"):
+    lvl = (level_hint or "").lower()
+    cls = "ok" if lvl in ("ok","good","low","high") else ("bad" if lvl in ("bad","highrisk","poor") else "warn")
+    st.markdown(f"<span class='pill {cls}'>{text}</span>", unsafe_allow_html=True)
+
+def pct(n):
+    try:
+        return f"{float(n):.1f}%"
+    except Exception:
+        return "n/a"
 
 # ---------------------- UI -------------------------------
-st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v8 FULL")
+st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v8.3 FULL")
 st.caption("AI-powered used-car deal analysis with live web cross-validation, ROI & seller trust (USD / miles).")
 st.info("AI opinion only. Always verify with CarFax/AutoCheck and a certified mechanic.", icon="⚠️")
 
@@ -339,7 +337,6 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         st.error("Please paste the listing text.")
         st.stop()
 
-    # Prepare prompt + multimodal
     extra = ""
     if vin_input: extra += f"\nVIN: {vin_input}"
     if zip_input: extra += f"\nZIP: {zip_input}"
@@ -356,8 +353,6 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     with st.spinner("Analyzing with Gemini 2.5 Pro (web cross-validation)…"):
         data = None
         last_error = None
-
-        # enforce JSON via retry loop (no ‘self-filling’ beyond parsing structure)
         for attempt in range(1, 4):
             try:
                 resp = model.generate_content(inputs, request_options={"timeout": 120})
@@ -374,14 +369,14 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
             st.error(f"❌ Failed to get valid JSON after 3 attempts. Last error: {last_error}")
             st.stop()
 
-        # Optional stabilization vs historical avg (no business self-fill; only if both exist)
+        # Mild stabilization vs historical mean (visual consistency only)
         try:
             fa = data.get("from_ad", {}) if isinstance(data, dict) else {}
             avg = get_model_avg_us(fa.get("brand",""), fa.get("model",""))
             if isinstance(avg, (int,float)) and isinstance(data.get("deal_score"), (int,float)):
                 diff = data["deal_score"] - avg
                 if abs(diff) >= 15:
-                    data["deal_score"] = int(data["deal_score"] - diff * 0.5)
+                    data["deal_score"] = int(max(0, min(100, data["deal_score"] - diff * 0.5)))
                     sv = (data.get("short_verdict","") or "").strip()
                     data["short_verdict"] = (sv + f" ⚙️ Stabilized vs historical mean ({avg}).").strip()
         except Exception:
@@ -393,8 +388,10 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         except Exception as e:
             st.warning(f"History save issue: {e}")
 
-        # ---------- Display (Visual Dashboard) ----------
+        # -------------- Display Dashboard ------------------
         st.divider()
+
+        # Extract common fields
         score = int(data.get("deal_score", 0) or 0)
         conf = float(data.get("confidence_level", 0) or 0.0)
         demand_idx = int(data.get("regional_demand_index", 0) or 0)
@@ -407,25 +404,31 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         insurance_band = (data.get("insurance_cost_band","") or "")
         climate = (data.get("climate_suitability","") or "")
         bench = data.get("benchmarks", {}) or {}
-        mpg_city = None
-        mpg_hwy = None
+        mpg_city = mpg_hwy = None
         if isinstance(bench.get("fuel_efficiency_mpg"), dict):
             mpg_city = bench["fuel_efficiency_mpg"].get("city", None)
             mpg_hwy  = bench["fuel_efficiency_mpg"].get("highway", None)
 
+        fair_lo, fair_hi = None, None
+        if isinstance(bench.get("fair_price_range_usd"), list) and len(bench["fair_price_range_usd"])>=2:
+            fair_lo, fair_hi = bench["fair_price_range_usd"][0], bench["fair_price_range_usd"][1]
+
+        # Listing block fields
+        fa = data.get("from_ad", {}) or {}
+        price = fa.get("price_usd", 0) or 0
+        miles = fa.get("mileage_mi", 0) or 0
+        year = fa.get("year", 0) or 0
+
         # Headline score
         color = "#16a34a" if score >= 80 else "#f59e0b" if score >= 60 else "#dc2626"
         st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {score}/100</h2>", unsafe_allow_html=True)
-
-        # Confidence
         meter("Confidence", conf*100, "%")
 
         # Web cross-validation
         if web_flag:
             st.success("🔎 Web cross-validation performed (live data used).")
             xval = data.get("cross_validation_result","")
-            if xval:
-                st.caption(xval)
+            if xval: st.caption(xval)
         else:
             st.warning("⚠️ No live web search performed — AI used internal knowledge only.")
 
@@ -433,12 +436,26 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         st.subheader("Summary")
         st.write(data.get("short_verdict",""))
 
-        # Listing block
+        # Listing
         st.subheader("Listing")
-        fa = data.get("from_ad", {}) or {}
-        st.write(f"**{fa.get('brand','')} {fa.get('model','')} {fa.get('year','')} {fa.get('trim','')}**")
-        st.write(f"**Price:** ${fa.get('price_usd',0):,}  |  **Miles:** {fa.get('mileage_mi',0):,}")
+        st.write(f"**{fa.get('brand','')} {fa.get('model','')} {year} {fa.get('trim','')}**")
+        st.write(f"**Price:** ${price:,}  |  **Miles:** {miles:,} mi")
         st.write(f"**Seller:** {fa.get('seller_type','') or 'n/a'}  |  **ZIP:** {fa.get('zip','') or 'n/a'}  |  **VIN:** {fa.get('vin','') or 'n/a'}")
+
+        # Fair price & delta
+        if fair_lo is not None and fair_hi is not None:
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.markdown("**Fair Price Range:** " + f"${fair_lo:,} – ${fair_hi:,}")
+            if price and fair_lo and fair_hi:
+                # Price delta vs midpoint
+                try:
+                    mid = (float(fair_lo)+float(fair_hi))/2.0
+                    delta = (price - mid)/mid * 100.0
+                    delta_text = f"{delta:+.1f}%"
+                    pill_text(f"Price Delta vs. Fair: {delta_text}", "ok" if delta <= -3 else "warn" if abs(delta) < 5 else "bad")
+                except Exception:
+                    pass
+            st.markdown("</div>", unsafe_allow_html=True)
 
         # Visual metrics grid
         st.subheader("Emphasized Signals")
@@ -448,24 +465,16 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         # Column A
         st.markdown("<div>", unsafe_allow_html=True)
         meter("Reliability (web)", reliability_web, "/100")
+        st.caption("Higher = fewer chronic issues for this model/year.")
         meter("Regional Demand", demand_idx, "/100")
-        inv_dep = max(0, min(100, 100 - dep2y))  # lower depreciation is better → invert number for fill
+        st.caption("Local buyer interest & inventory pressure.")
+        inv_dep = max(0, min(100, 100 - dep2y))  # lower depreciation better
         meter("2y Depreciation (lower is better)", inv_dep, "/100")
+        st.caption(f"Model forecast: {dep2y}% drop over 24 months.")
         st.markdown("</div>", unsafe_allow_html=True)
 
         # Column B
         st.markdown("<div>", unsafe_allow_html=True)
-        # ROI bar: normalize −30..+30 → 0..100
+        # ROI normalize −30..+30 → 0..100
         roi_cap = max(-30.0, min(30.0, roi_pct))
-        roi_norm = (roi_cap + 30.0) * (100.0/60.0)
-        meter("ROI (24m) potential", roi_norm, f"% ({roi_pct:+.1f}%)")
-        meter("Seller Trust Index", trust, "/100")
-        if (isinstance(mpg_city,(int,float)) and isinstance(mpg_hwy,(int,float))):
-            city_norm = max(0,min(60, mpg_city))*(100/60)
-            hwy_norm = max(0,min(60, mpg_hwy))*(100/60)
-            meter("Fuel Economy (city)", city_norm, f" MPG ({mpg_city})")
-            meter("Fuel Economy (hwy)",  hwy_norm, f" MPG ({mpg_hwy})")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)  # .grid
-        st.markdown("</div>", unsafe_allow_html=True)  # .
+        roi_norm = 
