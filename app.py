@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# AI Deal Checker (U.S.) – Final Version with Scoring Table
+# AI Deal Checker (U.S.) – Final Version (Stable + JSON Fix)
 # • English UI • USD / miles • OTD & TCO
-# • Gemini 2.5 Flash • Confidence Level
+# • Gemini 2.5 Flash • Confidence Level • Error-safe parsing
 # ===========================================================
 
 import os, re, json, traceback
@@ -130,24 +130,17 @@ def guess_brand_model(text):
 def build_us_prompt(ad: str, extra: str) -> str:
     return f"""
 You are a U.S. used-car deal checker. Analyze if the following ad is a smart buy for a U.S. consumer.
-Return concise English and JSON only.
+
+If you cannot find enough data, fill with reasonable approximations.  
+You **must** return valid JSON only, without any markdown, explanation, or text outside the JSON.
+
+If you encounter any missing fields, include `"unknown"` or `0`, but **never omit keys**.  
+If you face an internal error, output JSON with `"error": "description"`.
 
 Ad text:
 \"\"\"{ad}\"\"\"{extra}
 
-— REQUIRED EXTRACTION —
-(from_ad): brand, model, year, trim, engine, transmission, drivetrain, mileage_mi, price_usd, vin, zip, seller_type, accident_claim, owners_claim, notes.
-
-— MARKET BENCHMARKS —
-Estimate: fair_price_range_usd, demand_class, reliability_band, known_issues, safety_context.
-
-— DEAL MATH —
-Compute:
-1) price_delta_vs_fair
-2) OTD_estimate_usd (tax + dealer fees + doc)
-3) 24-month TCO: fuel/energy, insurance, maintenance.
-
-— SCORING TABLE (apply cumulatively, capped ±40) —
+--- SCORING TABLE (apply cumulatively, capped ±40) ---
 | Condition | Adjustment | Notes |
 |------------|-------------|-------|
 | Salvage/Rebuilt title | −35 | High risk |
@@ -162,7 +155,7 @@ Compute:
 | High-trim verified | +10 | Justified premium |
 | “One owner” + clean title + records | +7 | Verified low risk |
 
-— SCORING WEIGHTS (Base 0–100) —
+--- SCORING WEIGHTS ---
 Price vs fair – 30%
 Condition/history – 25%
 Reliability – 20%
@@ -170,7 +163,7 @@ Mileage vs year – 15%
 Transparency/title – 10%
 Then apply edge-case adjustments above.
 
-— OUTPUT JSON ONLY —
+--- OUTPUT JSON ONLY ---
 {{
   "from_ad": {{
     "brand":"", "model":"", "year":0, "trim":"", "engine":"", "transmission":"", "drivetrain":"",
@@ -229,8 +222,18 @@ if st.button("Check the Deal", use_container_width=True, type="primary"):
     with st.spinner("Analyzing the deal..."):
         try:
             resp = model.generate_content(inputs, request_options={"timeout": 120})
-            fixed = repair_json(resp.text or "")
-            data = json.loads(fixed)
+            raw = (resp.text or "").strip()
+
+            if not raw:
+                raise ValueError("Empty response from Gemini – no content returned.")
+
+            try:
+                fixed = repair_json(raw)
+                data = json.loads(fixed)
+            except Exception:
+                st.warning("⚠️ Gemini returned a non-JSON response. Raw preview:")
+                st.code(raw[:1000])
+                raise ValueError("Invalid JSON output from Gemini")
 
             avg = get_model_avg_us(data.get("from_ad",{}).get("brand",""), data.get("from_ad",{}).get("model",""))
             if isinstance(avg,(int,float)) and isinstance(data.get("deal_score"),(int,float)):
