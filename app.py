@@ -1,50 +1,82 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# AI Deal Checker – גרסה סופית ומצוחצחת (Gemini 2.5 Flash)
-# כולל ניתוח עקביות, תיקון שוק, 18 מקרי קצה, ושמירה ב-Google Sheets
+# AI Deal Checker (U.S.) – Production-Ready Minimal App
+# • English UI • USD / miles • OTD & 24m TCO sketch
+# • Gemini 2.5 Flash • Google Sheets history (optional)
+# • Consistency smoothing & JSON auto-repair
 # ===========================================================
+
+import os, re, json, traceback
+from datetime import datetime
 
 import streamlit as st
 import google.generativeai as genai
-import gspread, json, os, re, traceback
+from PIL import Image
+import gspread
 from google.oauth2.service_account import Credentials
 from json_repair import repair_json
-from PIL import Image
-import pandas as pd
-from datetime import datetime
 
-# ---------- הגדרות כלליות ----------
-st.set_page_config(page_title="AI Deal Checker 🚗", page_icon="🚗", layout="centered")
+# ----------------------- App Config ------------------------
+st.set_page_config(page_title="AI Deal Checker (U.S.)", page_icon="🚗", layout="centered")
 
-# ---------- חיבור ל-Gemini ----------
-api_key = st.secrets["GEMINI_API_KEY"]
-genai.configure(api_key=api_key)
+st.markdown("""
+<style>
+/* Clean, readable UI */
+:root { --ink: #0f172a; --muted:#64748b; --accent:#2563eb; }
+h1,h2,h3,h4 { color: var(--ink); font-weight: 700; }
+small, .muted { color: var(--muted); }
+.stTextInput>div>div>input, .stTextArea>div>textarea { font-size: 0.95rem; }
+div.block-container { padding-top: 1.2rem; }
+.badge { display:inline-block; padding:4px 8px; border-radius:8px; background:#eef2ff; color:#3730a3; font-weight:600; }
+.card { border:1px solid #e5e7eb; border-radius:12px; padding:14px; background:#fff; }
+.hint { background:#fff8e1; border:1px solid #ffecb3; padding:10px; border-radius:10px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------------- Secrets / Keys --------------------
+# Set these on Streamlit Cloud: GEMINI_API_KEY, GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_JSON
+GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
+SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
+SERVICE_ACCOUNT_JSON = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON", None)
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+LOCAL_FILE = "data_history_us.json"
+
+# ----------------------- Model Init ------------------------
+if not GEMINI_KEY:
+    st.error("GEMINI_API_KEY is missing in st.secrets.")
+    st.stop()
+
+genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
-# ---------- חיבור ל-Google Sheets ----------
-SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID")
-SERVICE_ACCOUNT_JSON = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+# ----------------------- GSheets (optional) ----------------
 sheet = None
+if SERVICE_ACCOUNT_JSON and SHEET_ID:
+    try:
+        creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_key(SHEET_ID).sheet1
+        st.toast("✅ Cloud history: connected", icon="✅")
+    except Exception:
+        st.toast("⚠️ Cloud history unavailable; using local file.", icon="⚠️")
+else:
+    st.toast("ℹ️ Cloud history not configured; using local file.", icon="ℹ️")
 
-try:
-    creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON, scopes=SCOPES)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).sheet1
-    st.success("✅ זיכרון AI מחובר בהצלחה – נתונים נשמרים לענן.")
-except Exception:
-    st.warning("⚠️ לא ניתן להתחבר לזיכרון AI, תתבצע שמירה מקומית בלבד.")
-    sheet = None
-
-LOCAL_FILE = "data_history.json"
-
-# ---------- פונקציות עזר ----------
+# ----------------------- Persistence -----------------------
 def load_history():
-    """קריאת נתונים מהשיטס או מקובץ מקומי."""
+    """Load from Google Sheets or local file."""
     if sheet:
         try:
-            data = sheet.get_all_records()
-            return [json.loads(row["data_json"]) for row in data if row.get("data_json")]
+            rows = sheet.get_all_records()
+            out = []
+            for r in rows:
+                # If you ever store flattened rows only, skip JSON. Here we prefer a JSON column if exists.
+                if "data_json" in r and r["data_json"]:
+                    try:
+                        out.append(json.loads(r["data_json"]))
+                    except Exception:
+                        pass
+            return out
         except Exception:
             pass
     if os.path.exists(LOCAL_FILE):
@@ -52,254 +84,292 @@ def load_history():
             return json.load(f)
     return []
 
-def save_to_history(entry):
-    """שמירה לשיטס או fallback מקומי."""
+def save_to_history(entry: dict):
+    """Append to Google Sheets or local file."""
     try:
         if sheet:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            flat_entry = [
-                timestamp,
-                entry["from_ad"].get("brand", ""),
-                entry["from_ad"].get("model", ""),
-                entry["from_ad"].get("year", ""),
-                entry.get("deal_score", ""),
-                entry.get("classification", ""),
-                entry["from_ad"].get("price_nis", ""),
-                entry.get("short_verdict", "")
+            # Flat row for quick analytics (keep order short & useful)
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fa = entry.get("from_ad", {})
+            flat = [
+                ts,
+                fa.get("brand",""), fa.get("model",""), fa.get("year",""),
+                fa.get("mileage_mi",""), fa.get("price_usd",""),
+                fa.get("zip",""), fa.get("vin",""), fa.get("seller_type",""),
+                entry.get("deal_score",""), entry.get("classification",""),
+                entry.get("risk_level",""), entry.get("otd_estimate_usd",""),
+                entry.get("price_delta_vs_fair",""),
+                entry.get("short_verdict","")
             ]
-            sheet.append_row(flat_entry)
+            # If your sheet expects headers, set them beforehand and use append_row accordingly.
+            sheet.append_row(flat, value_input_option="USER_ENTERED")
         else:
             data = load_history()
             data.append(entry)
             with open(LOCAL_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        st.error(f"שגיאה בשמירה: {e}")
+        st.warning(f"History save failed: {e}")
 
-def get_model_avg(brand, model_name):
-    history = load_history()
+def get_model_avg_us(brand: str, model_name: str):
+    hist = load_history()
     scores = [
-        h.get("deal_score") for h in history
-        if h.get("from_ad", {}).get("brand", "").lower() == brand.lower()
-        and model_name.lower() in h.get("from_ad", {}).get("model", "").lower()
+        h.get("deal_score") for h in hist
+        if isinstance(h.get("deal_score"), (int,float))
+        and h.get("from_ad", {}).get("brand","").lower()==brand.lower()
+        and model_name.lower() in h.get("from_ad", {}).get("model","").lower()
     ]
-    scores = [s for s in scores if isinstance(s, (int, float))]
-    return round(sum(scores)/len(scores), 2) if scores else None
+    return round(sum(scores)/len(scores),2) if scores else None
 
-def check_consistency(brand, model_name):
-    history = load_history()
-    relevant = [
-        h.get("deal_score") for h in history
-        if h.get("from_ad", {}).get("brand", "").lower() == brand.lower()
-        and model_name.lower() in h.get("from_ad", {}).get("model", "").lower()
+def check_consistency_us(brand: str, model_name: str):
+    hist = load_history()
+    rel = [
+        h.get("deal_score") for h in hist
+        if isinstance(h.get("deal_score"), (int,float))
+        and h.get("from_ad", {}).get("brand","").lower()==brand.lower()
+        and model_name.lower() in h.get("from_ad", {}).get("model","").lower()
     ]
-    relevant = [s for s in relevant if isinstance(s, (int, float))]
-    if len(relevant) >= 3 and max(relevant) - min(relevant) >= 25:
-        return True, relevant
-    return False, relevant
+    if len(rel) >= 3 and (max(rel) - min(rel) >= 20):
+        return True, rel
+    return False, rel
 
-def guess_brand_model(text):
-    if not text:
-        return "", ""
-    tokens = [t for t in re.split(r"[^\w\u0590-\u05FF\-]+", text.splitlines()[0]) if t]
-    if len(tokens) >= 2:
-        return tokens[0], " ".join(tokens[1:3])
+# ----------------------- Heuristics ------------------------
+def guess_brand_model(text: str):
+    if not text: return "", ""
+    head = text.splitlines()[0].strip()
+    toks = [t for t in re.split(r"[^\w\-]+", head) if t]
+    if len(toks) >= 2:
+        return toks[0], " ".join(toks[1:3])
     return "", ""
 
-# ---------- ממשק ----------
-st.title("🚗 AI Deal Checker")
-st.caption("בדוק כדאיות של מודעות רכב משומש עם ניתוח מבוסס בינה מלאכותית")
+# ----------------------- Header ----------------------------
+st.markdown("<span class='badge'>U.S. Edition</span>", unsafe_allow_html=True)
+st.title("🚗 AI Deal Checker — Know if it’s a smart buy")
+st.caption("LLM-powered deal analysis for U.S. used-car listings. (English • USD • miles)")
 
-ad_text = st.text_area("📋 הדבק כאן את טקסט המודעה:", height=250)
-uploaded_images = st.file_uploader("📸 העלה תמונות של הרכב (לא חובה):", type=["jpg","jpeg","png"], accept_multiple_files=True)
+with st.expander("Disclaimer", expanded=True):
+    st.markdown(
+        "<div class='hint'>This app provides an AI-based opinion for informational purposes only. "
+        "It is not financial, mechanical, or legal advice. Always verify with a VIN report (CarFax/AutoCheck) "
+        "and a certified pre-purchase inspection.</div>", unsafe_allow_html=True
+    )
 
-st.markdown(
-    """
-    <div style='background-color:#fff3cd; border-radius:10px; padding:10px; border:1px solid #ffeeba;'>
-    ⚠️ <b>הבהרה:</b> ניתוח זה מבוסס בינה מלאכותית ואינו תחליף לבדיקה מקצועית. מומלץ לבצע בדיקת מוסך מלאה לפני רכישה.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+# ----------------------- Inputs ----------------------------
+ad_text = st.text_area("Paste the listing text:", height=220, placeholder="Copy-paste the Craigslist/CarGurus/Facebook listing here…")
+uploaded_images = st.file_uploader("Upload listing photos (optional):", type=["jpg","jpeg","png"], accept_multiple_files=True)
 
-# ---------- פעולה ----------
-if st.button("חשב ציון כדאיות"):
-    if not ad_text.strip():
-        st.error("אנא הדבק טקסט של מודעה.")
-        st.stop()
+cols = st.columns(3)
+with cols[0]:
+    vin_input = st.text_input("VIN (optional)", placeholder="1HGCM82633A004352")
+with cols[1]:
+    zip_input = st.text_input("ZIP (optional)", placeholder="94103")
+with cols[2]:
+    seller_type = st.selectbox("Seller type", ["", "private", "dealer"])
 
-    with st.spinner("🔍 מחשב את כדאיות העסקה..."):
-        try:
-            g_brand, g_model = guess_brand_model(ad_text)
-            consistency_alert, prev_scores = check_consistency(g_brand, g_model)
-            stability_note = f"⚠️ זוהתה אי-עקביות בציונים קודמים לדגם זה ({prev_scores})." if consistency_alert else ""
+st.caption("Tip: Include the asking price, miles, trim, and any claims like 'clean title', 'one owner', 'as-is', etc.")
 
-            prompt = f"""
-אתה אנליסט מומחה לשוק הרכב הישראלי. הערך את כדאיות העסקה למודעה הבאה.
-{stability_note}
+# ----------------------- Core Prompt -----------------------
+def build_us_prompt(ad: str, extra: str) -> str:
+    return f"""
+You are a U.S. used-car deal checker. Analyze if the following ad is a smart buy for a U.S. consumer.
+Return clear, concise English. Use U.S. market logic.
 
---- שלבי הניתוח ---
-1. נתח את טקסט המודעה והפק נתונים: יצרן, דגם, שנה, מחיר, ק״מ, רמת גימור, מצב כללי.
-2. מצא נתוני שוק ממוצעים לדגם זה (מחיר, אמינות, תחזוקה, תקלות ידועות, ביקוש).
-3. השווה בין המידע מהמודעה לנתוני השוק.
-4. השתמש ב־18 מקרי הקצה להימנעות משגיאות.
-5. החזר תשובות רק בעברית רהוטה ומסודרת, במבנה מקצועי וברור.
-6.אם כתוב סוכנות בטקסט או בתמונה יש להחמיר את הציון ולהצהיר למשתמש את הסיכונים הכרוכים לצד היתרונות בקנייה של רכב מסוכנות ולא מפרטי.
+— INPUT —
+Ad text:
+\"\"\"{ad}\"\"\"{extra}
 
---- 18 מקרי הקצה ---
-- ק״מ גבוה אך מטופל = תקין  
-- מחיר נמוך עד 10% = לא חשוד  
-- מחיר גבוה מוצדק אם רמה מאובזרת  
-- רכב שטח = ק״מ גבוה נורמלי  
-- רכב נישה – לא לפי ביקוש  
-- ניסוח רשלני – לא שלילה  
-- מודעה קצרה – השלם מידע  
-- מחיר נמוך ב־50% = חשד השבתה  
-- יבוא אישי – אל תשווה רגיל  
-- אספנות – גיל לא חיסרון  
-- סוחר – הפחת אמינות  
-- “מחיר סופי” – לא בהכרח שלילי  
-- צבע חריג – אם מקורי לא חיסרון  
-- אין ק״מ – הערך ממוצע  
-- אזור לח – סיכון חלודה  
-- חסר מחיר – הערך לפי ממוצע  
-- ליסינג שטופל – תקין  
-- שפה זרה – הסתמך על נתונים בלבד  
+— If images are provided, use them to identify trim/options/warnings (accident signs, mismatched panels, dealer lot photos).
 
---- הרחבות נוספות לניתוח מקצועי ---
-
-6. ניתוח השוואתי מול קטגוריה:  
-השווה את הדגם למתחרים ישירים באותה קטגוריה ושנתון (לדוגמה: מאזדה 3 מול סיאט לאון / קיה סיד).  
-ציין אם מדובר ברכב עדיף בקבוצתו או עסקה סבירה בלבד.
-
-7. הערכת עלויות עתידיות:  
-הערך עלות החזקה לשנתיים קדימה (דלק, ביטוח, טיפולים, צמיגים, בלמים).  
-ציין אם הרכב צפוי להיות חסכוני או יקר לתחזוקה לאורך זמן.
-
-8. הערכת סיכון נסתר:  
-בדוק האם המודעה כוללת ניסוחים בעייתיים או חוסרים (כמו "דחוף", "מחיר הזדמנות", "לא רוצה למכור").  
-אם כן – הפחת 10–15 נק׳ מאמינות המוכר.
-
-9. מגמת שמירת ערך:  
-ציין אם הדגם שומר על ערכו היטב.  
-הוסף בונוס של +5 נק׳ לדגמים בעלי שמירת ערך גבוהה (טויוטה, לקסוס, סובארו וכו׳).
-
-10. השפעת שנתון-מנוע-גיר:  
-בדוק אם הדגם כולל רכיבים בעייתיים ידועים (כמו DSG ישן, CVT ישן של ניסאן, טורבו 1.4 VW).  
-במקרה כזה הפחת 5–10 נק׳ מהציון.
-
-11. השפעת סוג בעלות:  
-אם נכתב "בעלות פרטית ראשונה" – הוסף בונוס אמינות.  
-אם ליסינג/השכרה/יד שנייה מחברה – הפחת בהתאם (5–10 נק׳).
-
-12. שקלול שווי-ערך-ביצועים:  
-השווה בין המחיר לביצועים בפועל (כוח סוס, צריכת דלק, נוחות, אבזור).  
-ציין אם העסקה משתלמת גם מבחינת תמורה כוללת לנהג.
-
-13. אמינות לפי מותג:  
-אם המותג שייך לקטגוריית אמינות גבוהה (טויוטה, מאזדה, הונדה, לקסוס, סובארו) – הוסף בונוס קטן.  
-אם מדובר במותגים בעלי אמינות משתנה (פיאט, אלפא רומיאו, פיז׳ו, סיטרואן, רנו) – הפחת קל.
-
-14. ניתוח ניסוח המודעה:  
-הערך את סגנון הכתיבה.  
-מודעה מפורטת, עניינית וללא שגיאות כתיב – בונוס אמינות.  
-מודעה רגשית או כללית מדי – הפחת קל.
-
-15. ציון הסתברות סיכון (risk_level):  
-הוסף שדה "risk_level" עם אחת מהערכים: "נמוך", "בינוני", "גבוה".  
-החלט על רמת הסיכון לפי אמינות הדגם, מספר בעלים, והפער בין המחיר לשוק.
-
-16. חישוב ROI (תשואה על רכישה):  
-חשב בקירוב:  
-ROI = (שווי שוק משוער - מחיר מודעה) / מחיר מודעה  
-אם ROI > 0.1 (10%) – ציין שהעסקה משתלמת במיוחד גם כלכלית.
-
-17. עקביות היסטורית:  
-אם קיימים נתונים היסטוריים לאותו דגם – שמור את הציון בטווח של ±10 נק׳ מהממוצע.  
-ציין שהציון עבר “ייצוב על סמך היסטוריית המערכת”.
-
-18. מסקנה כללית:  
-סיים תמיד ב־`short_verdict` בעברית רהוטה עם משפט אחד שמרכז את כל הניתוח:
-> "עסקה מצוינת לרכב אמין ושמור היטב במחיר מתחת לשוק."  
-או  
-> "עסקה גבולית – רכב טוב אך עלול לגרור עלויות תחזוקה גבוהות."
-
---- נוסחת הציון (0–100) ---
-- מחיר מול שוק – 25%
-- תחזוקה ומצב – 25%
-- אמינות דגם – 20%
-- גיל וק״מ – 15%
-- אמינות מוכר – 10%
-- ביקוש – 5%
-
-🧠 חשוב מאוד:
-החזר את התשובה בעברית רהוטה, מקצועית וברורה.  
-אל תשתמש בביטויים גנריים ("נראה טוב", "סביר"), אלא רק בהערכות קונקרטיות עם נימוק מקצועי.  
-המענה חייב להיות עקבי, קריא, ולכלול פרטים מדידים על איכות העסקה.
-
-ספק פלט JSON בלבד בפורמט:
-{{
-  "from_ad": {{"brand":"", "model":"", "year":0, "mileage_km":0, "price_nis":0}},
-  "deal_score": 0,
-  "classification": "",
-  "short_verdict": "",
-  "key_reasons": [],
-  "user_info": {{"reliability_summary":"", "maintenance_tips":[], "common_faults":[], "market_context":""}}
+— REQUIRED EXTRACTION (from ad or infer cautiously) —
+Extract JSON fields:
+from_ad = {{
+  "brand": "", "model": "", "year": 0,
+  "trim": "", "engine": "", "transmission": "",
+  "drivetrain": "",  # FWD/AWD/RWD
+  "mileage_mi": 0,
+  "price_usd": 0,
+  "vin": "", "zip": "", "seller_type": "",  # private/dealer
+  "accident_claim": "",  # if stated
+  "owners_claim": "",    # if stated
+  "notes": ""            # notable claims: 'one owner', 'clean title', 'rebuilt title', 'warranty', 'as-is'
 }}
 
-מודעה:
-\"\"\"{ad_text}\"\"\"
+— MARKET BENCHMARKS (reasoned; cite typical sources as context, no live calls) —
+Estimate:
+- fair_price_range_usd (for zip/region if known; otherwise national)
+- demand_class (low/medium/high)
+- reliability_band (per brand/model generation)
+- known_issues (DSG/CVT gen issues, carbon buildup, EV battery degradation, etc.)
+- safety_context (IIHS/NHTSA generation-level remarks if relevant)
+
+— DEAL MATH —
+Compute:
+1) price_delta_vs_fair: ((ad_price - fair_mid) / fair_mid)
+2) OTD_estimate_usd = price_usd + state_tax_est + dealer_fees_est + doc_fee_est
+   * If seller_type == 'dealer': assume dealer_fees_est 400–1500 USD (explain range).
+   * If 'private': dealer_fees_est = 0.
+   * State tax: if zip known -> estimate 5–10%; else use 7% placeholder and state it’s an estimate.
+3) 24-month TCO sketch: fuel/energy, insurance (low/avg/high), routine maintenance/tires/brakes.
+
+— U.S. EDGE CASES (apply silently) —
+- Title: “Clean”=neutral; “Salvage/Rebuilt”= −25 to −40 on score.
+- Prior rental/fleet = −5 to −10 unless low miles/strong records.
+- Missing VIN = −5; VIN present = recommend CarFax/AutoCheck.
+- Price −30% below fair → check branded title/flood/auction; increase risk_level.
+- Snow/Rust belt ZIPs → rust risk; Sun belt → UV/interior wear risk.
+- EVs: consider pack degradation risk, DC fast-charge history, warranty remainder.
+- High trims/options can justify +10–15% over fair mid if verified.
+- Dealer “As-Is” → flag risk; private “As-Is” → normal.
+
+— SCORING (0–100) —
+Weights:
+- Price vs fair (region) – 30%
+- Vehicle condition & history signals – 25%
+- Reliability & known issues – 20%
+- Mileage vs year – 15%
+- Seller transparency & title status – 10%
+
+— OUTPUT JSON ONLY —
+{{
+  "from_ad": {{
+    "brand":"", "model":"", "year":0, "trim":"", "engine":"", "transmission":"", "drivetrain":"", 
+    "mileage_mi":0, "price_usd":0, "vin":"", "zip":"", "seller_type":"", "accident_claim":"", "owners_claim":"", "notes":""
+  }},
+  "benchmarks": {{
+    "fair_price_range_usd":[0,0],
+    "reliability_band":"", "known_issues":[], "demand_class":"", "safety_context":""
+  }},
+  "deal_score": 0,
+  "classification": "",  # "Great deal" | "Fair" | "Overpriced" | "High risk"
+  "risk_level": "",      # "low" | "medium" | "high"
+  "price_delta_vs_fair": 0.0,
+  "otd_estimate_usd": 0,
+  "tco_24m_estimate_usd": {{ "fuel_energy":0, "insurance":"low/avg/high", "maintenance":0 }},
+  "short_verdict": "",
+  "key_reasons": [],
+  "buyer_actions": [
+    "Run CarFax/AutoCheck by VIN",
+    "Schedule pre-purchase inspection (PPI)",
+    "Verify title status at DMV",
+    "Request service records"
+  ]
+}}
+Return only valid JSON.
 """
 
-            inputs = [prompt]
-            for img in uploaded_images or []:
-                try:
-                    inputs.append(Image.open(img))
-                except Exception:
-                    pass
+# ----------------------- Action Button ---------------------
+st.divider()
+btn = st.button("Check the deal", type="primary", use_container_width=True)
 
-            response = model.generate_content(inputs, request_options={"timeout": 120})
-            fixed_json = repair_json(response.text or "")
-            data = json.loads(fixed_json)
+# ----------------------- Main Flow -------------------------
+if btn:
+    if not ad_text.strip():
+        st.error("Please paste the listing text.")
+        st.stop()
 
-            avg = get_model_avg(data["from_ad"].get("brand",""), data["from_ad"].get("model",""))
-            if avg:
+    # Light pre-compute for stability messaging
+    g_brand, g_model = guess_brand_model(ad_text)
+    consistency_alert, prev_scores = check_consistency_us(g_brand, g_model)
+
+    extra = "\n"
+    if vin_input: extra += f"VIN: {vin_input}\n"
+    if zip_input: extra += f"ZIP: {zip_input}\n"
+    if seller_type: extra += f"Seller type: {seller_type}\n"
+    if consistency_alert:
+        extra += f"Historical note: prior scores for {g_brand} {g_model} varied: {prev_scores}\n"
+
+    prompt = build_us_prompt(ad_text, extra)
+
+    # Build multimodal inputs
+    inputs = [prompt]
+    for img in (uploaded_images or []):
+        try:
+            inputs.append(Image.open(img))
+        except Exception:
+            pass
+
+    with st.spinner("Analyzing the deal with AI…"):
+        try:
+            resp = model.generate_content(inputs, request_options={"timeout": 120})
+            txt = (resp.text or "").strip()
+            fixed = repair_json(txt)  # tolerate trailing commas, etc.
+            data = json.loads(fixed)
+
+            # Optional consistency smoothing vs historical avg of same model
+            avg = get_model_avg_us(data.get("from_ad",{}).get("brand",""), data.get("from_ad",{}).get("model",""))
+            if isinstance(avg, (int,float)) and isinstance(data.get("deal_score"), (int,float)):
                 diff = data["deal_score"] - avg
                 if abs(diff) >= 15:
                     data["deal_score"] = int(data["deal_score"] - diff * 0.5)
-                    data["short_verdict"] += f" ⚙️ בוצע תיקון לפי ממוצע היסטורי ({avg})."
+                    sv = data.get("short_verdict","").strip()
+                    sv += f" ⚙️ Score stabilized vs. historical mean ({avg})."
+                    data["short_verdict"] = sv
 
+            # Persist
             save_to_history(data)
 
-            # ---------- תצוגה ----------
-            score = data.get("deal_score", 0)
-            color = "#28a745" if score >= 80 else "#ffc107" if score >= 60 else "#dc3545"
-            st.markdown(f"<h2 style='color:{color};text-align:center;'>🚦 ציון העסקה: {score}/100</h2>", unsafe_allow_html=True)
+            # ---------------- UI Output ----------------
+            st.divider()
+            score = int(data.get("deal_score", 0) or 0)
+            color = "#16a34a" if score >= 80 else "#f59e0b" if score >= 60 else "#dc2626"
+            st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {score}/100</h2>", unsafe_allow_html=True)
             st.markdown(f"<h4 style='text-align:center;'>{data.get('classification','')}</h4>", unsafe_allow_html=True)
-            st.write("🧾", data.get("short_verdict",""))
+
+            fa = data.get("from_ad", {})
+            bm = data.get("benchmarks", {}) or {}
+            fair = bm.get("fair_price_range_usd", [0,0])
+            otd = data.get("otd_estimate_usd", 0)
+            risk = data.get("risk_level","").title()
+            pdelta = data.get("price_delta_vs_fair", 0.0)
+
+            colA, colB = st.columns(2)
+            with colA:
+                st.markdown("### Listing")
+                st.write(f"**{fa.get('brand','')} {fa.get('model','')} {fa.get('year','')} {fa.get('trim','')}**")
+                st.write(f"**Price:** ${fa.get('price_usd',0):,}  |  **Miles:** {fa.get('mileage_mi',0):,}")
+                st.write(f"**Seller:** {fa.get('seller_type','') or 'n/a'}  |  **ZIP:** {fa.get('zip','') or 'n/a'}")
+                st.write(f"**VIN:** {fa.get('vin','') or 'n/a'}")
+            with colB:
+                st.markdown("### Market")
+                try:
+                    st.write(f"**Fair range:** ${int(fair[0]):,}–${int(fair[1]):,}")
+                except Exception:
+                    st.write("**Fair range:** n/a")
+                st.write(f"**OTD estimate:** ${int(otd):,}")
+                st.write(f"**Risk level:** {risk or 'n/a'}")
+                st.write(f"**Δ vs fair:** {round(pdelta*100,1)}%")
 
             st.divider()
-            st.subheader("💡 ערך מוסף למשתמש")
-            info = data.get("user_info", {})
-            if info.get("reliability_summary"):
-                st.write(f"**אמינות הדגם:** {info['reliability_summary']}")
-            if info.get("common_faults"):
-                st.write("**תקלות נפוצות:**")
-                for fault in info["common_faults"]:
-                    st.write(f"• {fault}")
-            if info.get("maintenance_tips"):
-                st.write("**טיפים לתחזוקה:**")
-                for tip in info["maintenance_tips"]:
-                    st.write(f"• {tip}")
-            if info.get("market_context"):
-                st.write("**הקשר שוק כללי:**", info["market_context"])
+            st.markdown("### Key reasons")
+            for r in data.get("key_reasons", []):
+                st.markdown(f"- {r}")
 
-            st.subheader("🎯 סיבות עיקריות לציון")
-            for reason in data.get("key_reasons", []):
-                st.markdown(f"- {reason}")
+            if bm:
+                st.markdown("### Reliability & Known Issues")
+                if bm.get("reliability_band"):
+                    st.write(f"**Reliability:** {bm['reliability_band']}")
+                if bm.get("known_issues"):
+                    for ki in bm["known_issues"]:
+                        st.write(f"• {ki}")
+                if bm.get("safety_context"):
+                    st.write(f"**Safety:** {bm['safety_context']}")
 
-            st.caption("© 2025 Car Advisor AI – גרסה לומדת עם חיבור זיכרון חכם ל-Google Sheets")
+            st.markdown("### 24-month TCO (sketch)")
+            tco = data.get("tco_24m_estimate_usd", {}) or {}
+            st.write(f"**Fuel/Energy:** ${int(tco.get('fuel_energy',0)):,}  |  "
+                    f"**Insurance:** {tco.get('insurance','n/a')}  |  "
+                    f"**Maintenance:** ${int(tco.get('maintenance',0)):,}")
+
+            st.divider()
+            st.markdown("### Short verdict")
+            st.write(data.get("short_verdict",""))
+
+            st.caption("© 2025 AI Deal Checker — U.S. Edition. AI opinion only; verify with CarFax/AutoCheck and PPI.")
 
         except Exception:
-            st.error("❌ שגיאה בעיבוד הנתונים.")
+            st.error("Processing error.")
             st.code(traceback.format_exc())
+
+# ----------------------- Footer ----------------------------
+st.write("")
+st.markdown("<div class='muted'>Built with Gemini 2.5 Flash. No live data calls are made; estimates are heuristic.</div>", unsafe_allow_html=True)
