@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# AI Deal Checker (U.S.) – v7 Cross-Validated Intelligence Edition
+# AI Deal Checker (U.S.) – v8.1 Pro Visual Intelligence
 # • Gemini 2.5 Pro
 # • Internet Cross-Validation REQUIRED in prompt (no sources list in output)
+# • ROI (24m), Seller Trust Index, Depreciation Trend
+# • Visual dashboard: emphasized bars for ALL key params
 # • Strict JSON schema with retry loop (up to 3 attempts)
-# • 25 U.S. edge cases incl. climate, insurance, depreciation, seller behavior
-# • Graphical indicators for reliability, demand, confidence, depreciation
 # • Local JSON history + optional Google Sheets append
 # ===========================================================
 
@@ -19,22 +19,32 @@ from google.oauth2.service_account import Credentials
 from json_repair import repair_json
 
 # ---------------------- App Config -------------------------
-st.set_page_config(page_title="AI Deal Checker (U.S.) v7", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="AI Deal Checker (U.S.) v8.1", page_icon="🚗", layout="centered")
 st.markdown("""
 <style>
 :root { --ink:#0f172a; --muted:#64748b; --ok:#16a34a; --warn:#f59e0b; --bad:#dc2626; --accent:#2563eb; }
+* { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial; }
 h1,h2,h3,h4 { color:var(--ink); font-weight:700; }
 small,.muted{ color:var(--muted); }
 div.block-container { padding-top:1rem; }
-.progress {height:10px;background:#e5e7eb;border-radius:6px;overflow:hidden;}
+hr{ border:none;height:1px;background:#e5e7eb;margin:18px 0;}
+.card { border:1px solid #e5e7eb;border-radius:14px;padding:16px;background:#fff; }
+.badge { display:inline-block; padding:4px 10px; border-radius:999px; background:#eef2ff; color:#3730a3; font-weight:600; font-size:.8rem;}
+.progress {height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden;}
 .fill-ok {height:100%;background:var(--ok);transition:width .6s;}
 .fill-warn {height:100%;background:var(--warn);transition:width .6s;}
 .fill-bad {height:100%;background:var(--bad);transition:width .6s;}
-.badge { display:inline-block;padding:4px 10px;border-radius:999px;background:#eef2ff;color:#3730a3;font-weight:600;font-size:.8rem; }
-.card { border:1px solid #e5e7eb;border-radius:12px;padding:14px;background:#fff; }
-.kv { display:flex;gap:.5rem;flex-wrap:wrap;}
+.metric { display:flex; align-items:center; justify-content:space-between; margin:8px 0 6px; }
+.metric .label { font-weight:600; color:#111827; }
+.metric .value { font-variant-numeric: tabular-nums; font-weight:700; }
+.pill { display:inline-flex; align-items:center; gap:.4rem; padding:.35rem .6rem; border-radius:999px; font-weight:600; }
+.pill.ok { background:#ecfdf5; color:#065f46; }
+.pill.warn { background:#fffbeb; color:#92400e; }
+.pill.bad { background:#fef2f2; color:#991b1b; }
+.grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px;}
+@media (max-width: 860px){ .grid {grid-template-columns:1fr;} }
+.kv { display:flex; gap:.5rem; flex-wrap:wrap;}
 .kv span { background:#f3f4f6;border-radius:8px;padding:4px 8px; }
-hr{ border:none;height:1px;background:#e5e7eb;margin:18px 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -54,7 +64,7 @@ MODEL_NAME = "gemini-2.5-pro"
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel(MODEL_NAME)
 
-# Google Sheets (optional, same behavior as previous versions)
+# Google Sheets (optional – same behavior)
 sheet = None
 if SERVICE_ACCOUNT_JSON and SHEET_ID:
     try:
@@ -92,8 +102,11 @@ def save_to_history(entry: dict):
                 fa.get("mileage_mi",""), fa.get("price_usd",""),
                 entry.get("deal_score",""), entry.get("classification",""),
                 entry.get("risk_level",""), entry.get("confidence_level",""),
+                entry.get("roi_estimate_24m",""),
+                entry.get("seller_trust_index",""),
+                entry.get("depreciation_two_year_pct",""),
                 entry.get("short_verdict",""),
-                entry.get("web_search_performed","")
+                entry.get("web_search_performed",""),
             ]
             sheet.append_row(row, value_input_option="USER_ENTERED")
     except Exception as e:
@@ -108,26 +121,6 @@ def get_model_avg_us(brand: str, model_name: str):
         and model_name.lower() in h.get("from_ad", {}).get("model","").lower()
     ]
     return round(sum(scores)/len(scores),2) if scores else None
-
-def check_consistency_us(brand: str, model_name: str):
-    hist = load_history()
-    rel = [
-        h.get("deal_score") for h in hist
-        if isinstance(h.get("deal_score"), (int,float))
-        and h.get("from_ad", {}).get("brand","").lower()==brand.lower()
-        and model_name.lower() in h.get("from_ad", {}).get("model","").lower()
-    ]
-    if len(rel) >= 3 and (max(rel) - min(rel) >= 20):
-        return True, rel
-    return False, rel
-
-def guess_brand_model(text: str):
-    if not text: return "", ""
-    head = text.splitlines()[0].strip()
-    toks = [t for t in re.split(r"[^\w\-]+", head) if t]
-    if len(toks) >= 2:
-        return toks[0], " ".join(toks[1:3])
-    return "", ""
 
 # ---------------------- Prompt -----------------------------
 STRICT_DEMO_JSON = """
@@ -152,7 +145,8 @@ STRICT_DEMO_JSON = """
     "known_issues": [],
     "demand_class": "High",
     "safety_context": "IIHS Top Safety Pick",
-    "fuel_efficiency_mpg": {"city": 28, "highway": 39}
+    "fuel_efficiency_mpg": {"city": 28, "highway": 39},
+    "depreciation_trend": "Moderate (-18%)"
   },
   "deal_score": 87,
   "classification": "Great Deal",
@@ -164,6 +158,8 @@ STRICT_DEMO_JSON = """
     "insurance": "avg",
     "maintenance": 900
   },
+  "roi_estimate_24m": 7.5,
+  "seller_trust_index": 78,
   "short_verdict": "Excellent value, reliable powertrain, priced below market.",
   "key_reasons": [
     "Below-market pricing",
@@ -226,7 +222,7 @@ CRITICAL OUTPUT RULES:
 
 INTERNET CROSS-VALIDATION REQUIREMENT:
 • Perform a live web search using your knowledge augmentation ability (2023–2025 data).
-• Retrieve: reliability rating, common issues, real-world fuel economy (MPG), current market value range, recall/safety signals.
+• Retrieve: reliability rating, common issues, real-world fuel economy (MPG), current market value range, recall/safety signals, depreciation trend (24m), insurance & maintenance averages.
 • Compare web findings against the ad data and your AI estimation.
 • Output fields MUST include:
   "web_search_performed": true/false,
@@ -239,15 +235,16 @@ EDGE-CASE SCORING (apply cumulatively; cap ±40 total adjustment):
 BASE SCORING WEIGHTS (0–100 before edge-case modifiers):
 Price vs fair 30% • Condition/history 25% • Reliability 20% • Mileage vs year 15% • Transparency/title 10%
 
-CLIMATE/INSURANCE/DEPRECIATION ENRICHMENT:
+CLIMATE/INSURANCE/DEPRECIATION/BEHAVIOR ENRICHMENT:
 • Assess climate suitability (Rust-belt risk, Sun-belt UV wear).
 • Estimate insurance cost band (low/avg/high) for this model/year.
-• Forecast 2-year depreciation percentage.
+• Forecast 2-year depreciation percentage and also label trend (Low/Moderate/High).
 • Compute a regional demand index (0–100).
+• Compute Seller Trust Index (0–100) based on transparency (VIN/history), tone, price justification, and seller type.
 
 IMAGE GUIDANCE (if images present):
 • If dealer lot/branding visible, infer seller_type="dealer" unless stated otherwise.
-• Note mismatched panels, curb rash, unusual tire wear as risk cues.
+• Flag mismatched panels, curb rash, unusual tire wear as risk cues.
 
 REQUIRED OUTPUT SCHEMA (IMITATE STRUCTURE EXACTLY):
 {STRICT_DEMO_JSON}
@@ -258,32 +255,23 @@ Ad text:
 Return ONLY the JSON object.
 """.strip()
 
-# ---------------------- Strict JSON Parsing ----------------
+# ---------------------- JSON Parsing (strict) --------------
 def parse_json_strict(raw: str):
-    """Normalize wrappers and structural braces only; no business self-filling."""
     raw = (raw or "").strip()
     if not raw:
         raise ValueError("Empty response")
-
-    # strip accidental code fences
     if raw.startswith("```"):
         raw = re.sub(r"^```(json)?", "", raw, flags=re.IGNORECASE).strip()
     if raw.endswith("```"):
         raw = raw[:-3].strip()
-
-    # close missing braces/brackets symmetrically
-    open_braces, close_braces = raw.count("{"), raw.count("}")
-    if close_braces < open_braces:
-        raw += "}" * (open_braces - close_braces)
-    open_brackets, close_brackets = raw.count("["), raw.count("]")
-    if close_brackets < open_brackets:
-        raw += "]" * (open_brackets - close_brackets)
-
-    # direct attempt
+    # close braces/brackets symmetrically
+    ob, cb = raw.count("{"), raw.count("}")
+    if cb < ob: raw += "}" * (ob - cb)
+    osq, csq = raw.count("["), raw.count("]")
+    if csq < osq: raw += "]" * (osq - csq)
     try:
         return json.loads(raw)
     except Exception:
-        # cut to last closing brace/bracket and try again; deep repair as last resort
         last = max(raw.rfind("}"), raw.rfind("]"))
         if last > 0:
             cut = raw[: last + 1]
@@ -294,9 +282,33 @@ def parse_json_strict(raw: str):
                 return json.loads(fixed)
         raise
 
+# ---------------------- Helpers (UI) -----------------------
+def meter(label: str, value: float, suffix: str = "", invert: bool = False):
+    """
+    Render emphasized bar for a metric.
+    value: 0-100 (we clamp)
+    invert=True means 'lower is better' (we invert fill for color heuristic)
+    """
+    try:
+        v = float(value)
+    except Exception:
+        v = 0.0
+    v = max(0.0, min(100.0, v))
+    show_v = v
+    # choose class by value (or inverted)
+    ref = (100.0 - v) if invert else v
+    cls = 'fill-ok' if ref >= 70 else 'fill-warn' if ref >= 40 else 'fill-bad'
+    st.markdown(f"<div class='metric'><span class='label'>{label}</span><span class='value'>{int(show_v)}{suffix}</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='progress'><div class='{cls}' style='width:{int(show_v)}%'></div></div>", unsafe_allow_html=True)
+
+def pill(label: str, level: str):
+    level = (level or "").strip().lower()
+    cls = 'ok' if level in ('low','good','high') else ('warn' if level in ('avg','moderate','medium') else 'bad')
+    st.markdown(f"<span class='pill {cls}'>{label}</span>", unsafe_allow_html=True)
+
 # ---------------------- UI -------------------------------
-st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v7")
-st.caption("AI-powered used-car deal analysis with live web cross-validation (USD / miles).")
+st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v8.1")
+st.caption("AI-powered used-car deal analysis with live web cross-validation, ROI & seller trust (USD / miles).")
 st.info("AI opinion only. Always verify with CarFax/AutoCheck and a certified mechanic.", icon="⚠️")
 
 ad_text = st.text_area("Paste the listing text:", height=220, placeholder="Copy-paste the Craigslist / CarGurus / FB Marketplace ad…")
@@ -307,7 +319,7 @@ with c1: vin_input = st.text_input("VIN (optional)")
 with c2: zip_input = st.text_input("ZIP (optional)")
 with c3: seller_type = st.selectbox("Seller type", ["", "private", "dealer"])
 
-if st.button("Check the Deal", use_container_width=True, type="primary"):
+if st.button("Analyze Deal", use_container_width=True, type="primary"):
     if not ad_text.strip():
         st.error("Please paste the listing text.")
         st.stop()
@@ -362,7 +374,7 @@ if st.button("Check the Deal", use_container_width=True, type="primary"):
         except Exception as e:
             st.warning(f"History save issue: {e}")
 
-        # ---------- Display ----------
+        # ---------- Display (Visual Dashboard) ----------
         st.divider()
         score = int(data.get("deal_score", 0) or 0)
         conf = float(data.get("confidence_level", 0) or 0.0)
@@ -370,15 +382,23 @@ if st.button("Check the Deal", use_container_width=True, type="primary"):
         reliability_web = int(data.get("reliability_score_web", 0) or 0)
         dep2y = int(data.get("depreciation_two_year_pct", 0) or 0)
         web_flag = bool(data.get("web_search_performed", False))
+        roi_pct = float(data.get("roi_estimate_24m", 0) or 0.0)
+        trust = int(data.get("seller_trust_index", 0) or 0)
+        risk_level = (data.get("risk_level","") or "")
+        insurance_band = (data.get("insurance_cost_band","") or "")
+        climate = (data.get("climate_suitability","") or "")
+        bench = data.get("benchmarks", {}) or {}
+        mpg_city = bench.get("fuel_efficiency_mpg", {}).get("city", None) if isinstance(bench.get("fuel_efficiency_mpg", {}), dict) else None
+        mpg_hwy  = bench.get("fuel_efficiency_mpg", {}).get("highway", None) if isinstance(bench.get("fuel_efficiency_mpg", {}), dict) else None
 
+        # Headline score
         color = "#16a34a" if score >= 80 else "#f59e0b" if score >= 60 else "#dc2626"
         st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {score}/100</h2>", unsafe_allow_html=True)
 
-        # Confidence bar
-        st.markdown(f"**Confidence:** {int(conf*100)}%")
-        st.markdown(f"<div class='progress'><div class='fill-ok' style='width:{int(conf*100)}%'></div></div>", unsafe_allow_html=True)
+        # Confidence
+        meter("Confidence", conf*100, "%")
 
-        # Web cross-validation flag
+        # Web cross-validation
         if web_flag:
             st.success("🔎 Web cross-validation performed (live data used).")
             xval = data.get("cross_validation_result","")
@@ -391,63 +411,50 @@ if st.button("Check the Deal", use_container_width=True, type="primary"):
         st.subheader("Summary")
         st.write(data.get("short_verdict",""))
 
-        # Listing & Benchmarks
-        colA, colB = st.columns(2)
-        with colA:
-            st.subheader("Listing")
-            fa = data.get("from_ad", {}) or {}
-            st.write(f"**{fa.get('brand','')} {fa.get('model','')} {fa.get('year','')} {fa.get('trim','')}**")
-            st.write(f"**Price:** ${fa.get('price_usd',0):,}  |  **Miles:** {fa.get('mileage_mi',0):,}")
-            st.write(f"**Seller:** {fa.get('seller_type','') or 'n/a'}  |  **ZIP:** {fa.get('zip','') or 'n/a'}")
-            st.write(f"**VIN:** {fa.get('vin','') or 'n/a'}")
-        with colB:
-            st.subheader("Benchmarks")
-            bm = data.get("benchmarks", {}) or {}
-            st.json(bm, expanded=False)
+        # Listing block
+        st.subheader("Listing")
+        fa = data.get("from_ad", {}) or {}
+        st.write(f"**{fa.get('brand','')} {fa.get('model','')} {fa.get('year','')} {fa.get('trim','')}**")
+        st.write(f"**Price:** ${fa.get('price_usd',0):,}  |  **Miles:** {fa.get('mileage_mi',0):,}")
+        st.write(f"**Seller:** {fa.get('seller_type','') or 'n/a'}  |  **ZIP:** {fa.get('zip','') or 'n/a'}  |  **VIN:** {fa.get('vin','') or 'n/a'}")
 
-        # Graphs: Reliability, Regional Demand, Depreciation (invert), Confidence already shown
-        st.subheader("Signals")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown(f"**Reliability (web): {reliability_web}/100**")
-            st.markdown(f"<div class='progress'><div class='fill-ok' style='width:{reliability_web}%'></div></div>", unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"**Regional Demand: {demand_idx}/100**")
-            cls = 'fill-ok' if demand_idx>=70 else 'fill-warn' if demand_idx>=40 else 'fill-bad'
-            st.markdown(f"<div class='progress'><div class='{cls}' style='width:{demand_idx}%'></div></div>", unsafe_allow_html=True)
-        with c3:
-            dep_pct = max(0, min(100, dep2y))
-            # lower depreciation is better, so invert the bar (100 - dep)
-            inv = 100 - dep_pct
-            st.markdown(f"**2y Depreciation: {dep_pct}%**")
-            cls2 = 'fill-ok' if inv>=70 else 'fill-warn' if inv>=40 else 'fill-bad'
-            st.markdown(f"<div class='progress'><div class='{cls2}' style='width:{inv}%'></div></div>", unsafe_allow_html=True)
+        # Visual metrics grid
+        st.subheader("Emphasized Signals")
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<div class='grid'>", unsafe_allow_html=True)
 
-        # Key reasons
-        st.subheader("Key Reasons")
-        for r in data.get("key_reasons", []) or []:
-            st.write(f"- {r}")
+        # Col 1
+        st.markdown("<div>", unsafe_allow_html=True)
+        meter("Reliability (web)", reliability_web, "/100")
+        meter("Regional Demand", demand_idx, "/100")
+        # Depreciation: lower = better → invert bar color choice
+        inv_dep = max(0, min(100, 100 - dep2y))
+        meter("2y Depreciation (lower is better)", inv_dep, "/100 (inverted)", invert=False)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        # TCO
-        tco = (data.get("tco_24m_estimate_usd", {}) or {})
-        if tco:
-            st.subheader("24-month TCO (sketch)")
-            try:
-                st.write(
-                    f"**Fuel/Energy:** ${int(tco.get('fuel_energy',0)):,}  |  "
-                    f"**Insurance:** {tco.get('insurance','n/a')}  |  "
-                    f"**Maintenance:** ${int(tco.get('maintenance',0)):,}"
-                )
-            except Exception:
-                st.json(tco)
+        # Col 2
+        st.markdown("<div>", unsafe_allow_html=True)
+        # ROI (− or +). Normalize to 0–100 for bar, cap ±30%
+        roi_cap = max(-30.0, min(30.0, roi_pct))
+        roi_norm = (roi_cap + 30.0) * (100.0/60.0)  # -30→0, +30→100
+        meter("ROI (24m) potential", roi_norm, f"% ({roi_pct:+.1f}%)")
+        meter("Seller Trust Index", trust, "/100")
+        # MPG visual (if exists) – average two bars
+        if (isinstance(mpg_city,(int,float)) and isinstance(mpg_hwy,(int,float))):
+            city_norm = max(0,min(60, mpg_city))*(100/60)  # normalize to 60 mpg headroom
+            hwy_norm = max(0,min(60, mpg_hwy))*(100/60)
+            meter("Fuel Economy (city)", city_norm, f" MPG ({mpg_city})")
+            meter("Fuel Economy (hwy)",  hwy_norm, f" MPG ({mpg_hwy})")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Extras (if provided)
-        extras = []
-        if data.get("insurance_cost_band"): extras.append(f"Insurance band: {data.get('insurance_cost_band')}")
-        if data.get("climate_suitability"): extras.append(f"Climate suitability: {data.get('climate_suitability')}")
-        if data.get("ownership_cost_trend"): extras.append(f"Ownership cost trend: {data.get('ownership_cost_trend')}")
-        if extras:
-            st.subheader("Extras")
-            st.markdown("<div class='kv'>" + "".join([f"<span>{e}</span>" for e in extras]) + "</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)  # .grid
+        st.markdown("</div>", unsafe_allow_html=True)  # .card
 
-        st.caption("© 2025 AI Deal Checker — U.S. Edition (Pro) v7. AI opinion only; verify with VIN report & PPI.")
+        # Qualitative pills
+        st.subheader("Qualitative Flags")
+        pill(f"Risk: {risk_level or 'n/a'}", "low" if (risk_level or '').lower()=="low" else ("moderate" if (risk_level or '').lower()=="moderate" else "high"))
+        st.write(" ")
+        if insurance_band:
+            pill(f"Insurance: {insurance_band}", insurance_band)
+        if climate:
+            pill(f"Climate: {climate}", "moderate" if "Moderate" in climate else ("low" if "Good" in climate or "Low" in clim
