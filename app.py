@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker (U.S.) — v9.3 FULL Pro
-# Gemini 2.5 Pro | (claimed) web cross-validation | VIN/model stabilization
-# Styled visual history (cards), CSV export, Google Sheets (optional)
-# Adds: robust type coercion, raw JSON viewer, clear history, safer Sheets init
+# 🚗 AI Deal Checker (U.S.) — v9.3.3 FULL PRO
+# Gemini 2.5 Pro | VIN/model stabilization | Sheets fix | JSON viewer
 # ===========================================================
 
 import os, re, json, time, math
@@ -23,7 +21,7 @@ except Exception:
     Credentials = None
 
 # ---------------------- App Setup --------------------------
-st.set_page_config(page_title="AI Deal Checker (U.S.) — v9.3", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="AI Deal Checker (U.S.) — v9.3.3", page_icon="🚗", layout="centered")
 
 # Minimal CSS for meters/pills/cards
 st.markdown("""
@@ -50,7 +48,7 @@ GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
 SERVICE_JSON = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON", None)
 LOCAL_FILE = "deal_history_us.json"
-HISTORY_LIMIT = 500  # cap local history to avoid infinite growth
+HISTORY_LIMIT = 500  # cap local history
 
 if not GEMINI_KEY:
     st.error("Missing GEMINI_API_KEY in st.secrets.")
@@ -87,19 +85,25 @@ def _pct0_100(x):
     return max(0.0, min(100.0, v))
 
 def _fmt_money_usd(x):
-    v = _to_int(x, 0)
-    return f"${v:,}"
+    return f"${_to_int(x):,}"
 
 def _fmt_int(x):
-    v = _to_int(x, 0)
-    return f"{v:,}"
+    return f"{_to_int(x):,}"
 
 # ---------------------- Google Sheets ----------------------
 sheet = None
 if SHEET_ID and SERVICE_JSON and gspread and Credentials:
     try:
-        # SERVICE_JSON may come as dict or JSON string in secrets
-        sa_info = SERVICE_JSON if isinstance(SERVICE_JSON, dict) else json.loads(SERVICE_JSON)
+        # Convert AttrDict / dict / str → clean dict
+        if hasattr(SERVICE_JSON, "to_dict"):
+            sa_info = SERVICE_JSON.to_dict()
+        elif isinstance(SERVICE_JSON, dict):
+            sa_info = SERVICE_JSON
+        elif isinstance(SERVICE_JSON, str):
+            sa_info = json.loads(SERVICE_JSON)
+        else:
+            sa_info = json.loads(str(SERVICE_JSON))
+
         creds = Credentials.from_service_account_info(
             sa_info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
@@ -165,8 +169,8 @@ def save_history(entry):
                 entry.get("short_verdict","")
             ]
             sheet.append_row(row, value_input_option="USER_ENTERED")
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"⚠️ Sheet append failed: {e}")
 
 # ---------------------- Stabilization ----------------------
 def get_avg_score(identifier: str, model_name: str):
@@ -183,7 +187,7 @@ def get_avg_score(identifier: str, model_name: str):
                 scores.append(_to_float(h["deal_score"]))
     return round(sum(scores)/len(scores),2) if scores else None
 
-# ---------------------- Prompt (v9.3 Enhanced) -------------
+# ---------------------- Prompt (v9.3.3) --------------------
 STRICT_SCHEMA_EXAMPLE = """{
   "from_ad": {
     "brand": "Toyota",
@@ -310,7 +314,7 @@ def pill(label, level):
     st.markdown(f"<span class='pill {cls}'>{label}</span>", unsafe_allow_html=True)
 
 # ---------------------- UI -------------------------------
-st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v9.3")
+st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v9.3.3")
 st.caption("AI-powered used-car deal analysis with cross-validation prompt, VIN stability & Sheets sync. (Note: web search depends on the model’s browsing capabilities.)")
 
 # Controls row
@@ -382,7 +386,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     color = "#16a34a" if score >= 80 else ("#f59e0b" if score >= 60 else "#dc2626")
     st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {score}/100</h2>", unsafe_allow_html=True)
 
-    # Confidence (expects 0–1); if it's already 0–100 the _pct0_100 keeps it reasonable
+    # Confidence (supports 0–1 or 0–100)
     conf_raw = data.get("confidence_level", 0)
     conf = _pct0_100(_to_float(conf_raw) * (100.0 if _to_float(conf_raw) <= 1.0 else 1.0))
     meter("Confidence", conf, "%")
@@ -407,6 +411,18 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     st.write(f"**Price:** {_fmt_money_usd(fa.get('price_usd',0))}  |  **Miles:** {_fmt_int(fa.get('mileage_mi',0))}")
     st.write(f"**Seller:** {fa.get('seller_type','') or 'n/a'} | **ZIP:** {fa.get('zip','') or 'n/a'} | **VIN:** {fa.get('vin','') or 'n/a'}")
 
+    # Benchmarks (optional display)
+    bm = data.get("benchmarks", {}) or {}
+    if bm:
+        st.subheader("Benchmarks")
+        fr = bm.get("fair_price_range_usd", []) or []
+        ff = bm.get("fuel_efficiency_mpg", {}) or {}
+        st.write(f"- Fair price range: {fr if isinstance(fr, list) else fr}")
+        if isinstance(ff, dict):
+            st.write(f"- MPG: city {ff.get('city','?')} / hwy {ff.get('highway','?')}")
+        st.write(f"- Reliability band: {bm.get('reliability_band','unknown')}")
+        st.write(f"- Depreciation trend: {bm.get('depreciation_trend','unknown')}")
+
     st.subheader("Emphasized Signals")
     meter("Reliability (web)", data.get("reliability_score_web",0), "/100")
     meter("Regional Demand", data.get("regional_demand_index",0), "/100")
@@ -417,19 +433,21 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     pill(f"Insurance: {data.get('insurance_cost_band','')}", data.get("insurance_cost_band"))
     pill(f"Climate: {data.get('climate_suitability','')}", data.get("climate_suitability"))
 
+    # Common Issues (expander) — restored
     issues = data.get("common_issues_web", []) or []
     if issues:
         with st.expander("🧰 Common Issues Reported (Web)"):
             for i in issues:
                 st.markdown(f"- {i}")
 
+    # Raw JSON toggle
     if show_raw_json:
         st.subheader("Raw JSON")
         st.code(json.dumps(data, ensure_ascii=False, indent=2), language="json")
 
     # -------- Styled History (cards) + CSV export ----------
     st.divider()
-    st.caption("© 2025 AI Deal Checker — U.S. Edition (Pro) v9.3. AI opinion only; verify independently.")
+    st.caption("© 2025 AI Deal Checker — U.S. Edition (Pro) v9.3.3. AI opinion only; verify independently.")
 
     hist = load_history()
     if hist:
@@ -443,6 +461,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
             col = "#16a34a" if s>=80 else ("#f59e0b" if s>=60 else "#dc2626")
             st.markdown(f"<h4 style='color:{col};margin:4px 0;'>Deal Score: {s}/100</h4>", unsafe_allow_html=True)
 
+            # the 4 meters as in v9.2
             meter("Reliability (web)", h.get("reliability_score_web",0), "/100")
             meter("Seller Trust", h.get("seller_trust_index",0), "/100")
             conf_hist = h.get("confidence_level",0)
