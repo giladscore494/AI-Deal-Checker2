@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# AI Deal Checker (U.S.) – v8.1 Pro Visual Intelligence
+# AI Deal Checker (U.S.) – v8 FULL • Pro Visual + Cross-Validation
 # • Gemini 2.5 Pro
-# • Internet Cross-Validation REQUIRED in prompt (no sources list in output)
-# • ROI (24m), Seller Trust Index, Depreciation Trend
-# • Visual dashboard: emphasized bars for ALL key params
-# • Strict JSON schema with retry loop (up to 3 attempts)
+# • "Internet Cross-Validation" enforced in prompt (no sources list in output)
+# • ROI (24m), Seller Trust Index, Depreciation Trend (2y), MPG, Insurance, Climate
+# • Strict JSON schema + retry loop (up to 3 attempts) + robust JSON parsing
 # • Local JSON history + optional Google Sheets append
+# • Visual dashboard (progress bars + pills) for ALL key parameters
 # ===========================================================
 
 import os, re, json, time, traceback
@@ -14,12 +14,17 @@ from datetime import datetime
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
-import gspread
-from google.oauth2.service_account import Credentials
 from json_repair import repair_json
+# Optional Google Sheets (if secrets configured)
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except Exception:
+    gspread = None
+    Credentials = None
 
 # ---------------------- App Config -------------------------
-st.set_page_config(page_title="AI Deal Checker (U.S.) v8.1", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="AI Deal Checker (U.S.) — v8 FULL", page_icon="🚗", layout="centered")
 st.markdown("""
 <style>
 :root { --ink:#0f172a; --muted:#64748b; --ok:#16a34a; --warn:#f59e0b; --bad:#dc2626; --accent:#2563eb; }
@@ -29,7 +34,6 @@ small,.muted{ color:var(--muted); }
 div.block-container { padding-top:1rem; }
 hr{ border:none;height:1px;background:#e5e7eb;margin:18px 0;}
 .card { border:1px solid #e5e7eb;border-radius:14px;padding:16px;background:#fff; }
-.badge { display:inline-block; padding:4px 10px; border-radius:999px; background:#eef2ff; color:#3730a3; font-weight:600; font-size:.8rem;}
 .progress {height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden;}
 .fill-ok {height:100%;background:var(--ok);transition:width .6s;}
 .fill-warn {height:100%;background:var(--warn);transition:width .6s;}
@@ -45,6 +49,7 @@ hr{ border:none;height:1px;background:#e5e7eb;margin:18px 0;}
 @media (max-width: 860px){ .grid {grid-template-columns:1fr;} }
 .kv { display:flex; gap:.5rem; flex-wrap:wrap;}
 .kv span { background:#f3f4f6;border-radius:8px;padding:4px 8px; }
+.small { font-size:.9rem; color:#374151; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -52,8 +57,8 @@ hr{ border:none;height:1px;background:#e5e7eb;margin:18px 0;}
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
 SERVICE_ACCOUNT_JSON = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON", None)
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 LOCAL_FILE = "data_history_us.json"
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 if not GEMINI_KEY:
     st.error("Missing GEMINI_API_KEY in st.secrets.")
@@ -64,9 +69,9 @@ MODEL_NAME = "gemini-2.5-pro"
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel(MODEL_NAME)
 
-# Google Sheets (optional – same behavior)
+# Google Sheets (optional)
 sheet = None
-if SERVICE_ACCOUNT_JSON and SHEET_ID:
+if SERVICE_ACCOUNT_JSON and SHEET_ID and gspread and Credentials:
     try:
         creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON, scopes=SCOPES)
         client = gspread.authorize(creds)
@@ -108,7 +113,10 @@ def save_to_history(entry: dict):
                 entry.get("short_verdict",""),
                 entry.get("web_search_performed",""),
             ]
-            sheet.append_row(row, value_input_option="USER_ENTERED")
+            try:
+                sheet.append_row(row, value_input_option="USER_ENTERED")
+            except Exception:
+                pass
     except Exception as e:
         st.warning(f"Save failed: {e}")
 
@@ -122,8 +130,38 @@ def get_model_avg_us(brand: str, model_name: str):
     ]
     return round(sum(scores)/len(scores),2) if scores else None
 
-# ---------------------- Prompt -----------------------------
-STRICT_DEMO_JSON = """
+# ---------------------- Prompt Blocks ----------------------
+EDGE_CASE_TABLE = """
+| Condition | Adj. | Notes |
+|-----------|------|-------|
+| Salvage/Rebuilt title | −35 | High risk |
+| Flood/Water damage indicator | −25 | Catastrophic |
+| >1 reported accidents | −10 | Resale impact |
+| Fleet/Rental history | −8 | Hard usage |
+| Missing VIN | −5 | Transparency issue |
+| Dealer “As-Is” sale | −10 | Legal exposure |
+| High-trim verified | +10 | Premium justified |
+| One-owner + clean records | +7 | Lower risk |
+| Rust Belt ZIP (OH/MI/PA/WI/MN/IL/NY) | −7 | Corrosion risk |
+| Sun Belt ZIP (AZ/NV/FL/TX/CA) | −4 | UV/interior wear |
+| EV battery >80k mi / no warranty | −10 | Degradation |
+| Hybrid battery warranty valid | +6 | Advantage |
+| Missing CarFax/AutoCheck mention | −3 | Transparency |
+| No maintenance records | −5 | Caution |
+| Dealer warranty provided | +5 | Confidence |
+| Brand reputation (CR low <60) | −5 | Reliability risk |
+| Brand reputation (CR high ≥80) | +5 | Reliability bonus |
+| Early-gen DSG/CVT/turbo issues | −5 | Known issues |
+| Interior “very clean” w/photos | +3 | Minor bonus |
+| “Firm/No negotiation” | −2 | Lower flexibility |
+| “Price drop/Motivated seller” | +3 | Negotiation leverage |
+| Aftermarket mods (non-stock) | −5 | Maintenance uncertainty |
+| Accident-free verified | +5 | Confidence |
+| Unusually low miles (no red flags) | +3 | Value |
+| High highway miles ratio | +2 | Better wear profile |
+"""
+
+STRICT_SCHEMA_EXAMPLE = """
 {
   "from_ad": {
     "brand": "Toyota",
@@ -178,37 +216,7 @@ STRICT_DEMO_JSON = """
   "seller_behavior_flags": [],
   "regional_demand_index": 73
 }
-""".strip()
-
-EDGE_CASE_TABLE = """
-| Condition | Adj. | Notes |
-|-----------|------|-------|
-| Salvage/Rebuilt title | −35 | High risk |
-| Flood/Water damage indicator | −25 | Catastrophic |
-| >1 reported accidents | −10 | Resale impact |
-| Fleet/Rental history | −8 | Hard usage |
-| Missing VIN | −5 | Transparency issue |
-| Dealer “As-Is” sale | −10 | Legal exposure |
-| High-trim verified | +10 | Premium justified |
-| One-owner + clean records | +7 | Lower risk |
-| Rust Belt ZIP (OH/MI/PA/WI/MN/IL/NY) | −7 | Corrosion risk |
-| Sun Belt ZIP (AZ/NV/FL/TX/CA) | −4 | UV/interior wear |
-| EV battery >80k mi / no warranty | −10 | Degradation |
-| Hybrid battery warranty valid | +6 | Advantage |
-| Missing CarFax/AutoCheck mention | −3 | Transparency |
-| No maintenance records | −5 | Caution |
-| Dealer warranty provided | +5 | Confidence |
-| Brand reputation (CR low <60) | −5 | Reliability risk |
-| Brand reputation (CR high ≥80) | +5 | Reliability bonus |
-| Early-gen DSG/CVT/turbo issues | −5 | Known issues |
-| Interior “very clean” w/photos | +3 | Minor bonus |
-| “Firm/No negotiation” | −2 | Lower flexibility |
-| “Price drop/Motivated seller” | +3 | Negotiation leverage |
-| Aftermarket mods (non-stock) | −5 | Maintenance uncertainty |
-| Accident-free verified | +5 | Confidence |
-| Unusually low miles (no red flags) | +3 | Value |
-| High highway miles ratio | +2 | Better wear profile |
-""".strip()
+"""
 
 def build_us_prompt(ad: str, extra: str) -> str:
     return f"""
@@ -247,7 +255,7 @@ IMAGE GUIDANCE (if images present):
 • Flag mismatched panels, curb rash, unusual tire wear as risk cues.
 
 REQUIRED OUTPUT SCHEMA (IMITATE STRUCTURE EXACTLY):
-{STRICT_DEMO_JSON}
+{STRICT_SCHEMA_EXAMPLE}
 
 Ad text:
 \"\"\"{ad}\"\"\"{extra}
@@ -257,18 +265,26 @@ Return ONLY the JSON object.
 
 # ---------------------- JSON Parsing (strict) --------------
 def parse_json_strict(raw: str):
+    """Normalize wrappers and structural braces only; no business self-filling."""
     raw = (raw or "").strip()
     if not raw:
         raise ValueError("Empty response")
+
+    # strip accidental code fences
     if raw.startswith("```"):
         raw = re.sub(r"^```(json)?", "", raw, flags=re.IGNORECASE).strip()
     if raw.endswith("```"):
         raw = raw[:-3].strip()
-    # close braces/brackets symmetrically
-    ob, cb = raw.count("{"), raw.count("}")
-    if cb < ob: raw += "}" * (ob - cb)
-    osq, csq = raw.count("["), raw.count("]")
-    if csq < osq: raw += "]" * (osq - csq)
+
+    # close missing braces/brackets symmetrically
+    open_braces, close_braces = raw.count("{"), raw.count("}")
+    if close_braces < open_braces:
+        raw += "}" * (open_braces - close_braces)
+    open_brackets, close_brackets = raw.count("["), raw.count("]")
+    if close_brackets < open_brackets:
+        raw += "]" * (open_brackets - open_brackets)
+
+    # direct parse → if fail, cut to last brace → if fail, deep repair
     try:
         return json.loads(raw)
     except Exception:
@@ -282,24 +298,22 @@ def parse_json_strict(raw: str):
                 return json.loads(fixed)
         raise
 
-# ---------------------- Helpers (UI) -----------------------
+# ---------------------- UI Helpers ------------------------
 def meter(label: str, value: float, suffix: str = "", invert: bool = False):
     """
     Render emphasized bar for a metric.
-    value: 0-100 (we clamp)
-    invert=True means 'lower is better' (we invert fill for color heuristic)
+    value: 0-100 (clamped)
+    invert=True means 'lower is better' (we invert fill for color heuristic) — here we just note in label.
     """
     try:
         v = float(value)
     except Exception:
         v = 0.0
     v = max(0.0, min(100.0, v))
-    show_v = v
-    # choose class by value (or inverted)
     ref = (100.0 - v) if invert else v
     cls = 'fill-ok' if ref >= 70 else 'fill-warn' if ref >= 40 else 'fill-bad'
-    st.markdown(f"<div class='metric'><span class='label'>{label}</span><span class='value'>{int(show_v)}{suffix}</span></div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='progress'><div class='{cls}' style='width:{int(show_v)}%'></div></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric'><span class='label'>{label}</span><span class='value'>{int(v)}{suffix}</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='progress'><div class='{cls}' style='width:{int(v)}%'></div></div>", unsafe_allow_html=True)
 
 def pill(label: str, level: str):
     level = (level or "").strip().lower()
@@ -307,7 +321,7 @@ def pill(label: str, level: str):
     st.markdown(f"<span class='pill {cls}'>{label}</span>", unsafe_allow_html=True)
 
 # ---------------------- UI -------------------------------
-st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v8.1")
+st.title("🚗 AI Deal Checker — U.S. Edition (Pro) v8 FULL")
 st.caption("AI-powered used-car deal analysis with live web cross-validation, ROI & seller trust (USD / miles).")
 st.info("AI opinion only. Always verify with CarFax/AutoCheck and a certified mechanic.", icon="⚠️")
 
@@ -319,11 +333,13 @@ with c1: vin_input = st.text_input("VIN (optional)")
 with c2: zip_input = st.text_input("ZIP (optional)")
 with c3: seller_type = st.selectbox("Seller type", ["", "private", "dealer"])
 
+# ---------------------- Run -------------------------------
 if st.button("Analyze Deal", use_container_width=True, type="primary"):
     if not ad_text.strip():
         st.error("Please paste the listing text.")
         st.stop()
 
+    # Prepare prompt + multimodal
     extra = ""
     if vin_input: extra += f"\nVIN: {vin_input}"
     if zip_input: extra += f"\nZIP: {zip_input}"
@@ -338,7 +354,10 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
             pass
 
     with st.spinner("Analyzing with Gemini 2.5 Pro (web cross-validation)…"):
-        data, last_error = None, None
+        data = None
+        last_error = None
+
+        # enforce JSON via retry loop (no ‘self-filling’ beyond parsing structure)
         for attempt in range(1, 4):
             try:
                 resp = model.generate_content(inputs, request_options={"timeout": 120})
@@ -355,7 +374,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
             st.error(f"❌ Failed to get valid JSON after 3 attempts. Last error: {last_error}")
             st.stop()
 
-        # Optional stabilization vs historical avg (no self-filling; only if both exist)
+        # Optional stabilization vs historical avg (no business self-fill; only if both exist)
         try:
             fa = data.get("from_ad", {}) if isinstance(data, dict) else {}
             avg = get_model_avg_us(fa.get("brand",""), fa.get("model",""))
@@ -388,8 +407,11 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         insurance_band = (data.get("insurance_cost_band","") or "")
         climate = (data.get("climate_suitability","") or "")
         bench = data.get("benchmarks", {}) or {}
-        mpg_city = bench.get("fuel_efficiency_mpg", {}).get("city", None) if isinstance(bench.get("fuel_efficiency_mpg", {}), dict) else None
-        mpg_hwy  = bench.get("fuel_efficiency_mpg", {}).get("highway", None) if isinstance(bench.get("fuel_efficiency_mpg", {}), dict) else None
+        mpg_city = None
+        mpg_hwy = None
+        if isinstance(bench.get("fuel_efficiency_mpg"), dict):
+            mpg_city = bench["fuel_efficiency_mpg"].get("city", None)
+            mpg_hwy  = bench["fuel_efficiency_mpg"].get("highway", None)
 
         # Headline score
         color = "#16a34a" if score >= 80 else "#f59e0b" if score >= 60 else "#dc2626"
@@ -423,38 +445,27 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='grid'>", unsafe_allow_html=True)
 
-        # Col 1
+        # Column A
         st.markdown("<div>", unsafe_allow_html=True)
         meter("Reliability (web)", reliability_web, "/100")
         meter("Regional Demand", demand_idx, "/100")
-        # Depreciation: lower = better → invert bar color choice
-        inv_dep = max(0, min(100, 100 - dep2y))
-        meter("2y Depreciation (lower is better)", inv_dep, "/100 (inverted)", invert=False)
+        inv_dep = max(0, min(100, 100 - dep2y))  # lower depreciation is better → invert number for fill
+        meter("2y Depreciation (lower is better)", inv_dep, "/100")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Col 2
+        # Column B
         st.markdown("<div>", unsafe_allow_html=True)
-        # ROI (− or +). Normalize to 0–100 for bar, cap ±30%
+        # ROI bar: normalize −30..+30 → 0..100
         roi_cap = max(-30.0, min(30.0, roi_pct))
-        roi_norm = (roi_cap + 30.0) * (100.0/60.0)  # -30→0, +30→100
+        roi_norm = (roi_cap + 30.0) * (100.0/60.0)
         meter("ROI (24m) potential", roi_norm, f"% ({roi_pct:+.1f}%)")
         meter("Seller Trust Index", trust, "/100")
-        # MPG visual (if exists) – average two bars
         if (isinstance(mpg_city,(int,float)) and isinstance(mpg_hwy,(int,float))):
-            city_norm = max(0,min(60, mpg_city))*(100/60)  # normalize to 60 mpg headroom
+            city_norm = max(0,min(60, mpg_city))*(100/60)
             hwy_norm = max(0,min(60, mpg_hwy))*(100/60)
             meter("Fuel Economy (city)", city_norm, f" MPG ({mpg_city})")
             meter("Fuel Economy (hwy)",  hwy_norm, f" MPG ({mpg_hwy})")
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("</div>", unsafe_allow_html=True)  # .grid
-        st.markdown("</div>", unsafe_allow_html=True)  # .card
-
-        # Qualitative pills
-        st.subheader("Qualitative Flags")
-        pill(f"Risk: {risk_level or 'n/a'}", "low" if (risk_level or '').lower()=="low" else ("moderate" if (risk_level or '').lower()=="moderate" else "high"))
-        st.write(" ")
-        if insurance_band:
-            pill(f"Insurance: {insurance_band}", insurance_band)
-        if climate:
-            pill(f"Climate: {climate}", "moderate" if "Moderate" in climate else ("low" if "Good" in climate or "Low" in clim
+        st.markdown("</div>", unsafe_allow_html=True)  # .
