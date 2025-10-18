@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# AI Deal Checker (U.S.) – v4 (Gemini 2.5 Pro + strict JSON demo)
-# • Forces valid JSON structure with live example
-# • Stable recovery for any malformed output
+# AI Deal Checker (U.S.) – v5 (Gemini 2.5 Pro + Retry JSON enforcement)
 # ===========================================================
 
-import os, re, json, traceback
+import os, re, json, traceback, time
 from datetime import datetime
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
-import gspread
-from google.oauth2.service_account import Credentials
 from json_repair import repair_json
 
 # ---------------------- Config ----------------------------
@@ -26,126 +22,99 @@ st.markdown("""
 
 # ---------------------- Secrets ---------------------------
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
-SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
-SERVICE_ACCOUNT_JSON = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON", None)
-LOCAL_FILE = "data_history_us.json"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
 if not GEMINI_KEY:
     st.error("Missing GEMINI_API_KEY in st.secrets.")
     st.stop()
 
-# ---------- Gemini 2.5 Pro (enforced) ----------
-MODEL_NAME = "gemini-2.5-pro"
 genai.configure(api_key=GEMINI_KEY)
+MODEL_NAME = "gemini-2.5-pro"
 model = genai.GenerativeModel(MODEL_NAME)
-
-# ---------------------- Sheets ----------------------------
-sheet = None
-try:
-    if SERVICE_ACCOUNT_JSON and SHEET_ID:
-        creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON, scopes=SCOPES)
-        client = gspread.authorize(creds)
-        sheet = client.open_by_key(SHEET_ID).sheet1
-        st.toast("✅ Connected to Google Sheets")
-    else:
-        st.toast("ℹ️ Using local storage only.")
-except Exception:
-    st.toast("⚠️ Google Sheets unavailable.")
-
-# ---------------------- Helpers ---------------------------
-def load_history():
-    if os.path.exists(LOCAL_FILE):
-        with open(LOCAL_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
-
-def save_to_history(entry):
-    data = load_history()
-    data.append(entry)
-    with open(LOCAL_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def guess_brand_model(txt):
-    if not txt: return "",""
-    parts = re.split(r"[^\w\-]+", txt.splitlines()[0])
-    if len(parts)>=2: return parts[0], " ".join(parts[1:3])
-    return "",""
 
 # ---------------------- Prompt ----------------------------
 def build_us_prompt(ad, extra):
     return f"""
-You are an automotive analyst. Evaluate the following *U.S.* used-car listing.
-Your task: produce a **single, valid JSON object only** — no markdown, no text outside the JSON.
+You are an expert automotive analyst for U.S. used-car listings.
+Your ONLY job: return **one complete, valid JSON object** — no markdown, no prose.
 
-⚠️ **DO NOT return explanations or prose. Only JSON.**
-If information is missing, fill with `"unknown"` or `0` but keep all keys.
+If the model output is incomplete or truncated, you MUST re-output the full JSON again.
 
 Ad text:
 \"\"\"{ad}\"\"\"{extra}
 
---- REQUIRED OUTPUT FORMAT (imitate exactly this structure) ---
-Example:
+--- REQUIRED OUTPUT FORMAT ---
 {{
   "from_ad": {{
-    "brand": "Honda",
-    "model": "Civic",
+    "brand": "Toyota",
+    "model": "Camry",
     "year": 2020,
-    "trim": "EX",
-    "engine": "2.0L I4",
-    "transmission": "CVT",
+    "trim": "SE",
+    "engine": "2.5L I4",
+    "transmission": "Automatic",
     "drivetrain": "FWD",
     "mileage_mi": 48000,
-    "price_usd": 18500,
+    "price_usd": 18900,
     "vin": "unknown",
     "zip": "94110",
     "seller_type": "private"
   }},
   "benchmarks": {{
-    "fair_price_range_usd": [17500,19500],
+    "fair_price_range_usd": [18000,20000],
     "reliability_band": "High",
     "known_issues": [],
     "demand_class": "High",
     "safety_context": "IIHS Top Safety Pick"
   }},
-  "deal_score": 82,
+  "deal_score": 87,
   "classification": "Great Deal",
   "risk_level": "Low",
-  "price_delta_vs_fair": -0.07,
+  "price_delta_vs_fair": -0.05,
   "otd_estimate_usd": 19900,
   "tco_24m_estimate_usd": {{
     "fuel_energy": 2600,
     "insurance": "avg",
     "maintenance": 900
   }},
-  "short_verdict": "Excellent condition, below-market price, one-owner history.",
+  "short_verdict": "Excellent value, reliable powertrain, priced below market.",
   "key_reasons": [
-    "Below market by ~7%",
-    "Clean title and records",
-    "Reliable powertrain"
+    "Below-market pricing",
+    "Clean title, one owner",
+    "High reliability rating"
   ],
   "confidence_level": 0.96
 }}
 
-Follow this schema exactly.
-
---- SCORING TABLE (apply cumulatively, capped ±40) ---
-| Condition | Adj. | Notes |
-|------------|------|-------|
-| Salvage title | −35 | High risk |
-| Fleet/Rental | −8 | Unless records |
-| Missing VIN | −5 | Transparency issue |
-| Price < −30% vs fair | −15 | Possible branded title |
-| Dealer “As-Is” | −10 | Legal exposure |
-| Rust Belt ZIP | −7 | Corrosion |
-| Sun Belt ZIP | −4 | UV/interior wear |
-| EV battery > 80k mi no warranty | −10 |
-| Missing CarFax | −3 |
-| High-trim verified | +10 |
-| “One owner” + clean title | +7 |
-
-Return only the final JSON.
+If you cannot infer a field, set `"unknown"` or `0`, but KEEP ALL KEYS.
+ALWAYS ensure valid JSON with matching brackets.
+Output only the JSON — no explanations, no markdown fences.
 """
+
+# ---------------------- Helper ----------------------------
+def try_parse_json(raw):
+    """Attempt to clean and parse JSON from Gemini output."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(json)?", "", raw, flags=re.IGNORECASE).strip()
+    if raw.endswith("```"):
+        raw = raw[:-3].strip()
+
+    open_braces, close_braces = raw.count("{"), raw.count("}")
+    if close_braces < open_braces:
+        raw += "}" * (open_braces - close_braces)
+    open_brackets, close_brackets = raw.count("["), raw.count("]")
+    if close_brackets < open_brackets:
+        raw += "]" * (open_brackets - close_brackets)
+
+    try:
+        return json.loads(raw)
+    except Exception:
+        last = max(raw.rfind("}"), raw.rfind("]"))
+        if last > 0:
+            try:
+                return json.loads(raw[:last+1])
+            except Exception:
+                fixed = repair_json(raw[:last+1])
+                return json.loads(fixed)
+        raise ValueError("Invalid JSON")
 
 # ---------------------- UI -------------------------------
 st.title("🚗 AI Deal Checker — U.S. Edition (Pro)")
@@ -175,60 +144,42 @@ if st.button("Check the Deal", use_container_width=True, type="primary"):
         try: inputs.append(Image.open(img))
         except Exception: pass
 
-    with st.spinner("Analyzing the deal with Gemini 2.5 Pro…"):
-        try:
-            resp = model.generate_content(inputs, request_options={"timeout":120})
-            raw = (resp.text or "").strip()
+    with st.spinner("Analyzing with Gemini 2.5 Pro (JSON strict mode)..."):
+        attempt = 0
+        data = None
+        error_msg = None
 
-            if not raw:
-                raise ValueError("Empty response from Gemini Pro.")
-
-            # --- Smart JSON Recovery ---
-            if not raw.endswith("}"):
-                raw += "}" * (raw.count("{") - raw.count("}"))
-            if not raw.endswith("]") and raw.count("[")>raw.count("]"):
-                raw += "]"
-
+        while attempt < 3 and data is None:
+            attempt += 1
             try:
-                fixed = repair_json(raw)
-                data = json.loads(fixed)
-            except Exception:
-                st.warning("⚠️ Partial JSON – attempting recovery.")
-                last = max(raw.rfind("}"), raw.rfind("]"))
-                if last>0:
-                    try:
-                        data = json.loads(raw[:last+1])
-                        st.success("✅ Recovered trimmed JSON.")
-                    except Exception:
-                        fixed2 = repair_json(raw[:last+1])
-                        data = json.loads(fixed2)
-                        st.success("✅ Recovered via deep repair.")
-                else:
-                    st.error("❌ Invalid JSON – showing preview.")
-                    st.code(raw[:1000])
-                    data = {"deal_score":0,"short_verdict":"⚠️ Gemini output invalid."}
+                resp = model.generate_content(inputs, request_options={"timeout":90})
+                raw = (resp.text or "").strip()
+                data = try_parse_json(raw)
+            except Exception as e:
+                error_msg = str(e)
+                time.sleep(1.5)
+                st.warning(f"Attempt {attempt} failed — retrying JSON generation...")
+                inputs[0] = build_us_prompt(ad_text, extra)  # reinforce structure
 
-            save_to_history(data)
+        if data is None:
+            st.error(f"❌ Failed after 3 attempts. Last error: {error_msg}")
+            st.stop()
 
-            # ---------- Display ----------
-            score = int(data.get("deal_score",0))
-            conf = float(data.get("confidence_level",0))
-            color = "#16a34a" if score>=80 else "#f59e0b" if score>=60 else "#dc2626"
-            st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {score}/100</h2>", unsafe_allow_html=True)
-            st.markdown(f"<p style='text-align:center;'>Confidence: {int(conf*100)}%</p>", unsafe_allow_html=True)
-            st.markdown(f"<div class='progress-bar'><div class='progress-bar-fill' style='width:{int(conf*100)}%;'></div></div>", unsafe_allow_html=True)
+        # ---------- Display ----------
+        score = int(data.get("deal_score",0))
+        conf = float(data.get("confidence_level",0))
+        color = "#16a34a" if score>=80 else "#f59e0b" if score>=60 else "#dc2626"
+        st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {score}/100</h2>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align:center;'>Confidence: {int(conf*100)}%</p>", unsafe_allow_html=True)
+        st.markdown(f"<div class='progress-bar'><div class='progress-bar-fill' style='width:{int(conf*100)}%;'></div></div>", unsafe_allow_html=True)
 
-            st.subheader("Summary")
-            st.write(data.get("short_verdict",""))
-            st.subheader("Key Reasons")
-            for r in data.get("key_reasons", []):
-                st.write(f"- {r}")
+        st.subheader("Summary")
+        st.write(data.get("short_verdict",""))
+        st.subheader("Key Reasons")
+        for r in data.get("key_reasons", []):
+            st.write(f"- {r}")
 
-            st.subheader("Benchmarks")
-            st.json(data.get("benchmarks", {}), expanded=False)
+        st.subheader("Benchmarks")
+        st.json(data.get("benchmarks", {}), expanded=False)
 
-            st.caption("© 2025 AI Deal Checker — U.S. Edition (Pro) • Gemini 2.5 Pro")
-
-        except Exception:
-            st.error("❌ Error processing data.")
-            st.code(traceback.format_exc())
+        st.caption("© 2025 AI Deal Checker — U.S. Edition (Pro) • Gemini 2.5 Pro strict JSON mode")
