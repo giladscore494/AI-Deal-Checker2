@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.1
-# Fully hardened: validation, fallback, sanity filters, dynamic ROI & VIN averaging
+# 🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.2 (Debug Edition)
+# Elastic-Deterministic Deal Score + Flexible ROI (24m)
+# + On-screen DEBUG breakdown for Score & ROI reasoning
 # Gemini 2.5 Pro | Live Web Reasoning | Dynamic Weights | VIN/Model History | Sheets (optional)
 # ===========================================================
 
@@ -25,9 +26,9 @@ import google.generativeai as genai
 # -------------------------------------------------------------
 # CONFIG
 # -------------------------------------------------------------
-st.set_page_config(page_title="AI Deal Checker (v9.9.1)", page_icon="🚗", layout="centered")
-st.title("🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.1")
-st.caption("Elastic deterministic Deal Score + Flexible ROI 24m with dynamic weights & hardened validation (Gemini 2.5 Pro).")
+st.set_page_config(page_title="AI Deal Checker (v9.9.2 Debug)", page_icon="🚗", layout="centered")
+st.title("🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.2")
+st.caption("Deterministic score + Flexible ROI with on-screen debug reasoning (Gemini 2.5 Pro).")
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
@@ -71,6 +72,13 @@ st.markdown("""
 .pill.warn{background:#fffbeb;color:#92400e;}
 .pill.bad{background:#fef2f2;color:#991b1b;}
 small.muted{color:var(--muted);}
+.debug {font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        background:#0b1220; color:#e6edf3; border-radius:10px; padding:14px; line-height:1.45;}
+.debug h4{margin:0 0 8px 0; color:#8ab4f8;}
+.debug .k{color:#7ee787;}
+.debug .v{color:#79c0ff;}
+.debug .n{color:#ffa657;}
+.debug .w{color:#ff7b72;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,7 +124,6 @@ def save_history(entry):
         except Exception as e:
             st.warning(f"Sheets write failed: {e}")
 
-# Simple VIN/model average stabilizer (optional usage)
 def get_avg_score(vin:str,model:str):
     hist=load_history(); vals=[]
     for h in hist:
@@ -129,8 +136,8 @@ def get_avg_score(vin:str,model:str):
 
 def extract_price_from_text(txt:str):
     if not txt: return None
-    t = re.sub(r"\s+", '', txt)
-    m = re.search(r"[\$]?([0-9]{2,3}(?:[,][0-9]{3})+)", t)
+    t = re.sub(r'\s+', '', txt)
+    m = re.search(r'[\$]?([0-9]{2,3}(?:[,][0-9]{3})+)', t)
     if m:
         try:
             return float(m.group(1).replace(',',''))
@@ -139,7 +146,7 @@ def extract_price_from_text(txt:str):
     return None
 
 def parse_json_safe(raw:str):
-    raw=(raw or "").replace("```json",""").replace("```",""").strip()
+    raw=(raw or "").replace("```json","").replace("```","").strip()
     try: return json.loads(raw)
     except: return json.loads(repair_json(raw))
 
@@ -159,42 +166,56 @@ def safe_value(data:dict, key:str, default):
     if v in (None, "", [], {}, "null", "N/A", "NA"): return default
     return v
 
-def validate_model_output(data:dict):
+def validate_model_output(data:dict, debug_lines:list):
+    """
+    Normalize suspicious outputs (score 0–10 → ×10, ROI -12500 → -12.5, etc.)
+    and ensure required blocks exist.
+    """
     if not isinstance(data, dict): data = {}
-    score = data.get("deal_score", None)
+
+    # --- Normalize deal score ---
+    score_raw = data.get("deal_score", None)
     try:
-        score = float(score)
+        score = float(score_raw)
     except:
         score = None
+
     if score is None:
+        debug_lines.append("deal_score: <missing> → set to 50.0 (default)")
         score = 50.0
-    if score < 1 and score > 0:
-        score *= 100
-    elif 0 < score <= 10:
+    elif score <= 10:
+        debug_lines.append(f"deal_score: detected 0–10 scale ({score_raw}) → ×10")
         score *= 10
-    elif score > 100 and score <= 1000:
-        score = score / 10.0
+    elif 10 < score <= 1000:
+        debug_lines.append(f"deal_score: detected 0–1000 scale ({score_raw}) → ÷10")
+        score /= 10.0
     elif score > 1000:
+        debug_lines.append(f"deal_score: absurd scale ({score_raw}) → clamp to 90")
         score = 90.0
+
     score = round(clip(score, 0, 100), 1)
     data["deal_score"] = score
 
+    # --- Normalize ROI ---
     roi = data.get("roi_forecast_24m", {})
     if not isinstance(roi, dict): roi = {}
     for k in ["expected", "optimistic", "pessimistic"]:
-        v = roi.get(k, None)
+        v_raw = roi.get(k, None)
         try:
-            v = float(v)
+            v = float(v_raw)
         except:
             v = None
         if v is None:
             roi[k] = 0.0
+            debug_lines.append(f"roi.{k}: <missing> → set 0.0")
             continue
         if abs(v) > 200:
+            debug_lines.append(f"roi.{k}: detected ×100 scale ({v_raw}) → ÷100")
             v = v / 100.0
         roi[k] = round(clip(v, -80, 60), 1)
     data["roi_forecast_24m"] = roi
 
+    # Ensure numeric blocks
     data["price_stats"] = safe_value(data, "price_stats", {"median": None, "p25": None, "p75": None})
     data["mileage_stats"] = safe_value(data, "mileage_stats", {"median": None, "std": None})
     data["vehicle_facts"] = safe_value(data, "vehicle_facts", {})
@@ -203,15 +224,25 @@ def validate_model_output(data:dict):
 
     return data
 
-def quick_fallback_score(ad_text:str):
+def quick_fallback_score(ad_text:str, debug_lines:list):
+    """
+    Backup score when JSON parse fails — adds reasoned notes.
+    """
     ad = (ad_text or "").lower()
     score = 50
-    if "clean title" in ad or "clean carfax" in ad: score += 10
-    if "rebuilt" in ad or "salvage" in ad: score -= 20
-    if "low miles" in ad or "one owner" in ad: score += 8
-    if "fleet" in ad or "rental" in ad or "press" in ad: score -= 10
-    if "ppf" in ad or "warranty" in ad or "cpo" in ad: score += 6
-    return max(0, min(100, score))
+    if "clean title" in ad or "clean carfax" in ad:
+        score += 10; debug_lines.append("fallback: +10 (clean title/carfax)")
+    if "rebuilt" in ad or "salvage" in ad:
+        score -= 20; debug_lines.append("fallback: -20 (rebuilt/salvage)")
+    if "low miles" in ad or "one owner" in ad:
+        score += 8; debug_lines.append("fallback: +8 (low miles/one owner)")
+    if "fleet" in ad or "rental" in ad or "press" in ad:
+        score -= 10; debug_lines.append("fallback: -10 (fleet/rental/press)")
+    if "ppf" in ad or "warranty" in ad or "cpo" in ad:
+        score += 6; debug_lines.append("fallback: +6 (ppf/warranty/cpo)")
+    score = max(0, min(100, score))
+    debug_lines.append(f"fallback: final score {score}")
+    return score
 
 # -------------------------------------------------------------
 # Deterministic elastic scoring & ROI
@@ -244,38 +275,69 @@ def weighted_score(components:dict, weights:dict):
     if wsum == 0: return 0.0
     return round(score / wsum, 1)
 
-def build_components(P_ask, price_stats, mileage_stats, facts, tco_year, state_or_zip, age_years):
+def build_components(P_ask, price_stats, mileage_stats, facts, tco_year, state_or_zip, age_years, debug_lines:list):
     P_med = (price_stats or {}).get("median") or P_ask
     miles_med = (mileage_stats or {}).get("median") or 0
     miles_std = (mileage_stats or {}).get("std") or max(1, abs(miles_med)*0.25)
 
-    market_delta_pct = 100.0 * (P_ask - P_med) / max(P_med,1.0)
-    market_component = clip(100 - (abs(market_delta_pct)*0.8), 0, 100)
+    # Market
+    market_delta_pct = 100.0 * (P_ask - P_med) / max(P_med,1.0) if P_med else 0.0
+    market_component = clip(100 - abs(market_delta_pct)*0.8, 0, 100)
+    debug_lines.append(f"market: P_ask={P_ask}, P_med={P_med} → Δ={market_delta_pct:.2f}% → comp={market_component:.1f}")
 
+    # Mileage
     miles = facts.get("miles") or facts.get("odometer") or 0
-    miles_z = clip((miles - miles_med)/max(miles_std,1.0), -3, 3)
-    mileage_component = clip(100 - (abs(miles_z)*10), 0, 100)
+    miles_z = (miles - miles_med)/max(miles_std,1.0) if miles_std else 0
+    mileage_component = clip(100 - abs(miles_z*10), 0, 100)
+    debug_lines.append(f"mileage: miles={miles}, miles_med={miles_med}, std={miles_std} → z={miles_z:.2f} → comp={mileage_component:.1f}")
 
-    tco_ratio = 100.0 * (tco_year or 0)/max(P_ask,1.0)
+    # TCO
+    tco_ratio = 100.0 * (tco_year or 0)/max(P_ask,1.0) if P_ask else 0
     tco_component = clip(100 - (tco_ratio - 10.0), 0, 100)
+    debug_lines.append(f"tco: tco_year={tco_year}, ratio={tco_ratio:.2f}% → comp={tco_component:.1f}")
 
+    # Title
     title = (facts.get("title_status") or "unknown").lower()
     title_component = {"clean":100, "rebuilt":70, "salvage":50}.get(title, 80)
+    debug_lines.append(f"title: '{title}' → comp={title_component}")
 
+    # Accidents
     accidents = int(facts.get("accidents") or 0)
     accidents_component = clip(100 - accidents*10, 0, 100)
+    debug_lines.append(f"accidents: count={accidents} → comp={accidents_component}")
 
+    # Owners
     owners = int(facts.get("owners") or 1)
     owners_component = clip(100 - (owners-1)*8, 0, 100)
+    debug_lines.append(f"owners: count={owners} → comp={owners_component}")
 
+    # Rust
     r_base = rust_base(state_or_zip)
     rust_component = clip(100 - (r_base * (age_years or 0)*2), 0, 100)
+    debug_lines.append(f"rust: state_zip='{state_or_zip}', base={r_base}, age={age_years} → comp={rust_component}")
 
-    rarity_component = clip(50 + float(facts.get("rarity_index") or 0)*50, 0, 100)
-    options_component = clip(60 + (float(facts.get("options_value_usd") or 0)/1000)*2, 0, 100)
+    # Rarity
+    rarity = float(facts.get("rarity_index") or 0.0)  # 0..1
+    rarity_component = clip(50 + rarity*50, 0, 100)
+    debug_lines.append(f"rarity: index={rarity} → comp={rarity_component}")
+
+    # Options
+    options_val = float(facts.get("options_value_usd") or 0.0)
+    options_component = clip(60 + (options_val/1000)*2, 0, 100)
+    debug_lines.append(f"options: value_usd={options_val} → comp={options_component:.1f}")
+
+    # Days on market
     dom = int(facts.get("days_on_market") or 0)
     dom_component = clip(100 - (dom/10), 0, 100)
-    dealer_component = clip(float(facts.get("dealer_reputation") or 80), 0, 100)
+    debug_lines.append(f"dom: days={dom} → comp={dom_component:.1f}")
+
+    # Dealer reputation
+    dealer_component = float(facts.get("dealer_reputation")) if facts.get("dealer_reputation") is not None else None
+    if dealer_component is None:
+        debug_lines.append("dealer_reputation: <missing> → ignored in scoring")
+    else:
+        dealer_component = clip(dealer_component, 0, 100)
+        debug_lines.append(f"dealer_reputation: rep={facts.get('dealer_reputation')} → comp={dealer_component}")
 
     return {
         "market": market_component, "mileage": mileage_component, "tco": tco_component,
@@ -284,8 +346,10 @@ def build_components(P_ask, price_stats, mileage_stats, facts, tco_year, state_o
         "dom": dom_component, "dealer_reputation": dealer_component
     }
 
-def calc_roi_24m_flexible(inputs:dict):
+# ---------- Flexible ROI (24m) ----------
+def calc_roi_24m_flexible(inputs:dict, debug_lines:list):
     P_ask = float(inputs.get("P_ask") or 0)
+    P_comp_median = float(inputs.get("P_comp_median") or (P_ask or 1))
     dep = float(inputs.get("depreciation_brand_pct_per_year") or 10)/100.0
     tco = float(inputs.get("tco_year") or 0)
     trend = float(inputs.get("market_trend") or 0)/100.0
@@ -294,35 +358,42 @@ def calc_roi_24m_flexible(inputs:dict):
     sell_cost = float(inputs.get("sell_cost_pct") or 2)/100.0
     hold_years = float(inputs.get("hold_period") or 24)/12.0
 
-    dep_eff = dep + mileage_pen + own_pen - trend
-    dep_eff = clip(dep_eff, 0.02, 0.25)
-
+    dep_eff = clip(dep + mileage_pen + own_pen - trend, 0.02, 0.25)
     P_exit = P_ask * ((1 - dep_eff)**hold_years)
     P_exit_net = P_exit * (1 - sell_cost)
-
     cash_out = P_ask + (tco * hold_years)
     cash_in = P_exit_net
+
+    debug_lines.extend([
+        f"ROI.inputs: P_ask={P_ask}, P_comp_med={P_comp_median}, dep={dep*100:.1f}%, trend={trend*100:.1f}%",
+        f"ROI.inputs: mileage_pen={mileage_pen*100:.2f}%, own_pen={own_pen*100:.2f}%, sell_cost={sell_cost*100:.1f}%, hold_years={hold_years}",
+        f"ROI.calc: dep_eff={dep_eff*100:.2f}% → P_exit={P_exit:.0f}, P_exit_net={P_exit_net:.0f}, cash_out={cash_out:.0f}, cash_in={cash_in:.0f}"
+    ])
 
     if P_ask <= 0:
         return {"expected": 0.0, "optimistic": 0.0, "pessimistic": 0.0, "confidence": 0.5}
 
     roi_exp = 100.0 * (cash_in - cash_out)/P_ask
 
+    # uncertainty from missing
     missing_keys = [k for k in ["depreciation_brand_pct_per_year","tco_year","market_trend","mileage_factor"] if not inputs.get(k)]
     uncertainty = min(0.3 + 0.05*len(missing_keys), 0.6)
+    debug_lines.append(f"ROI.uncertainty: missing={missing_keys} → u={uncertainty:.2f}")
 
     roi_opt = roi_exp * (1 + uncertainty*0.5)
     roi_pes = roi_exp * (1 - uncertainty)
 
-    return {
+    out = {
         "expected": round(clip(roi_exp, -80, 60), 1),
         "optimistic": round(clip(roi_opt, -80, 60), 1),
         "pessimistic": round(clip(roi_pes, -80, 60), 1),
         "confidence": round(1 - uncertainty, 2)
     }
+    debug_lines.append(f"ROI.out: exp={out['expected']}%, opt={out['optimistic']}%, pes={out['pessimistic']}%, conf={out['confidence']}")
+    return out
 
 # -------------------------------------------------------------
-# PROMPT (requests dynamic weights & numeric blocks)
+# PROMPT
 # -------------------------------------------------------------
 def build_prompt(ad:str, extra:str):
     return f"""
@@ -331,57 +402,23 @@ You MUST perform a live web lookup for comps (Cars.com, Autotrader, Edmunds).
 If live lookup fails, set "web_search_performed": false.
 
 Return STRICT JSON with:
-- numeric price stats & mileage stats for matching comps,
-- deterministic TCO/year,
-- depreciation & market trend,
-- discrete vehicle facts,
-- dynamic weights that sum to ~1.0 for scoring components,
-- and which factors were missing/unverifiable.
-
-{{
+{{ 
  "from_ad": {{"brand":"","model":"","year":null,"vin":"","seller_type":""}},
  "price_stats": {{"median":null,"p25":null,"p75":null}},
  "mileage_stats": {{"median":null,"std":null}},
  "tco_year_usd": null,
  "market_trend_24m_pct": 0,
  "depreciation_brand_pct_per_year": null,
-
- "vehicle_facts": {{
-   "title_status": "clean",
-   "accidents": 0,
-   "owners": 1,
-   "cpo": false,
-   "warranty_months": 0,
-   "dealer_reputation": null,
-   "rarity_index": 0.0,
-   "options_value_usd": 0,
-   "days_on_market": 0,
-   "state_or_zip": "",
-   "miles": null
- }},
- "weights": {{
-   "market": 0.25,
-   "mileage": 0.15,
-   "tco": 0.10,
-   "title": 0.10,
-   "accidents": 0.05,
-   "owners": 0.05,
-   "rust": 0.05,
-   "rarity": 0.05,
-   "options": 0.05,
-   "dom": 0.05,
-   "dealer_reputation": 0.10
- }},
+ "vehicle_facts": {{"title_status":"clean","accidents":0,"owners":1,"dealer_reputation":null,"rarity_index":0,"options_value_usd":0,"days_on_market":0,"state_or_zip":"","miles":null}},
+ "weights": {{"market":0.25,"mileage":0.15,"tco":0.10,"title":0.10,"accidents":0.05,"owners":0.05,"rust":0.05,"rarity":0.05,"options":0.05,"dom":0.05,"dealer_reputation":0.10}},
  "missing_factors": [],
-
  "deal_score_llm_adj_hint": "neutral|slightly_positive|positive|strong_positive|slightly_negative|negative|strong_negative",
-
  "web_search_performed": false,
  "confidence_level": 0.8
 }}
 
 INPUT AD:
-"""{ad}"""
+\"\"\"{ad}\"\"\"
 {extra}
 """.strip()
 
@@ -401,6 +438,7 @@ def safe_extract_price_from_data(data:dict):
 
 if st.button("Analyze Deal",use_container_width=True,type="primary"):
     if not ad.strip(): st.error("Please paste listing text first."); st.stop()
+
     extra=""
     if vin: extra+=f"\nVIN: {vin}"
     if zip_code: extra+=f"\nZIP/State: {zip_code}"
@@ -414,17 +452,22 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
         except Exception:
             pass
 
+    debug_lines = []  # collect verbose reasoning
+
     with st.spinner("Analyzing with Gemini 2.5 Pro (web reasoning)…"):
         data=None
-        for _ in range(2):
+        raw_text=None
+        for attempt in range(2):
             try:
                 r=model.generate_content(parts,request_options={"timeout":120})
-                data=parse_json_safe(getattr(r,"text", "")); 
+                raw_text = getattr(r, "text", None)
+                data=parse_json_safe(raw_text); 
                 break
             except Exception as e:
                 st.warning(f"Retrying... ({e})"); time.sleep(1.5)
+
         if not data:
-            fb = quick_fallback_score(ad)
+            fb = quick_fallback_score(ad, debug_lines)
             data = {
                 "from_ad": {"brand":"","model":"","year":None,"vin":"","seller_type":seller},
                 "price_stats": {"median": None, "p25": None, "p75": None},
@@ -439,19 +482,23 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
                 "analysis_note": "⚠️ Fallback heuristics used due to model output error."
             }
 
-    data = validate_model_output(data)
+    # ---------- Validation layer ----------
+    data = validate_model_output(data, debug_lines)
 
+    # ---------- Deterministic elastic scoring ----------
     price_stats = data.get("price_stats") or {}
     mileage_stats = data.get("mileage_stats") or {}
     tco_year = data.get("tco_year_usd") or data.get("tco_year") or 0
     facts = data.get("vehicle_facts") or {}
 
+    # derive age
     try:
         y = int((data.get("from_ad") or {}).get("year") or 0)
         age_years = max(0, datetime.now().year - y) if y else 0
     except:
         age_years = 0
 
+    # price detect
     P_ask_val = extract_price_from_text(ad) or safe_extract_price_from_data(data) or 0
     state_or_zip_eff = facts.get("state_or_zip") or zip_code or ""
 
@@ -462,7 +509,8 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
         facts=facts,
         tco_year=tco_year,
         state_or_zip=state_or_zip_eff,
-        age_years=age_years
+        age_years=age_years,
+        debug_lines=debug_lines
     )
 
     base_weights = {
@@ -479,8 +527,13 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
         blended[k] = 0.7*base_weights[k] + 0.3*mv
     weights = normalize_weights(blended, data.get("missing_factors") or [])
 
+    # explain weights
+    for k in sorted(weights, key=lambda x: -weights[x]):
+        debug_lines.append(f"weight.{k} = {weights[k]:.3f}")
+
     deal_score_det = weighted_score(components, weights)
 
+    # optional small LLM sentiment adj
     adj_hint = (data.get("deal_score_llm_adj_hint") or "neutral").lower()
     adj_map = {
         "strong_negative": -6, "negative": -4, "slightly_negative": -2,
@@ -491,6 +544,9 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
     data["deal_score_components"] = components
     data["deal_score_weights"] = weights
 
+    debug_lines.append(f"score.det = {deal_score_det:.1f}, adj_hint='{adj_hint}' → final={final:.1f}")
+
+    # ---------- ROI Flexible ----------
     dep_brand = data.get("depreciation_brand_pct_per_year") or (data.get("vehicle_facts") or {}).get("depreciation_brand_pct_per_year")
     market_trend = data.get("market_trend_24m_pct") or 0
 
@@ -500,20 +556,18 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
     try:
         if miles_med:
             diff = (float(miles) - float(miles_med))
-            mileage_factor = clip(diff/2000.0 * 0.5, -3.0, 3.0)
+            mileage_factor = clip(diff/2000.0 * 0.5, -3.0, 3.0)  # ~±0.5% per 2k miles
     except: 
         mileage_factor = 0.0
 
     ownership_pen = 0.0
     t_stat = str(facts.get("title_status","clean")).lower()
-    if t_stat == "rebuilt": ownership_pen += 0.05
-    if t_stat == "salvage": ownership_pen += 0.10
+    if t_stat == "rebuilt": ownership_pen += 0.05  # +5% yearly
+    if t_stat == "salvage": ownership_pen += 0.10  # +10% yearly
     if (facts.get("accidents") or 0):
         try:
-            if int(facts.get("accidents")) >= 2:
-                ownership_pen += 0.02
-        except:
-            pass
+            if int(facts.get("accidents")) >= 2: ownership_pen += 0.02
+        except: pass
 
     P_med_val = (price_stats or {}).get("median") or P_ask_val
 
@@ -523,25 +577,32 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
         "depreciation_brand_pct_per_year": dep_brand or 10,
         "tco_year": float(tco_year or 0),
         "market_trend": float(market_trend or 0),
-        "mileage_factor": float(mileage_factor*100),
-        "ownership_cost_modifiers": float(ownership_pen*100),
+        "mileage_factor": float(mileage_factor*100),            # back to %
+        "ownership_cost_modifiers": float(ownership_pen*100),   # back to %
         "sell_cost_pct": 2.0,
         "hold_period": 24
     }
-    roi_calc = calc_roi_24m_flexible(roi_inputs)
+    roi_calc = calc_roi_24m_flexible(roi_inputs, debug_lines)
     data["roi_forecast_24m"] = roi_calc
 
+    # ---------- Optional VIN/model averaging stabilization ----------
     avg=get_avg_score(vin, (data.get("from_ad",{}) or {}).get("model",""))
     if avg and isinstance(final,(int,float)):
         diff=final-avg
         if abs(diff)>10:
+            final_before = final
             final = round((final+avg)/2,1)
             data["deal_score"]=final
             data["deal_score_note"]=f"⚙️ Stabilized vs model/VIN avg ({avg})"
+            debug_lines.append(f"stabilizer: final {final_before:.1f} vs avg {avg} → {final:.1f}")
 
+    # Save history (local + optional Sheets)
     data["web_search_performed"] = bool(data.get("web_search_performed"))
     save_history(data)
 
+    # ---------------------------------------------------------
+    # DISPLAY
+    # ---------------------------------------------------------
     color="#16a34a" if final>=80 else ("#f59e0b" if final>=60 else "#dc2626")
     st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {final}/100</h2>",unsafe_allow_html=True)
 
@@ -549,7 +610,6 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
         st.success("🌐 Live web search performed and validated.")
     else:
         st.warning("⚠️ No live web lookup detected (AI used internal data only).")
-
 
     if data.get("analysis_note"):
         st.warning(data.get("analysis_note"))
@@ -567,11 +627,15 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
     if roi.get("confidence") is not None:
         meter("ROI Confidence", float(roi.get("confidence",0))*100, "%")
 
-
     if final < 30 or (roi and roi.get("confidence",1.0) < 0.6):
         st.warning("⚠️ Low confidence: score/ROI may be distorted due to missing or malformed data.")
 
     st.subheader("Raw Model Confidence")
     meter("Model confidence", float(data.get("confidence_level",0))*100, "%")
 
-    st.caption("© 2025 AI Deal Checker v9.9.1 — Elastic deterministic scoring with Gemini 2.5 Pro web reasoning. AI analysis only; verify independently.")
+    # ---------- DEBUG OUTPUT ----------
+    st.markdown("<div class='debug'><h4>🧩 Debug Breakdown (Score & ROI reasoning)</h4>" + 
+                "<br/>".join([ln.replace("→", "→").replace("<","&lt;").replace(">","&gt;") for ln in debug_lines]) +
+                "</div>", unsafe_allow_html=True)
+
+    st.caption("© 2025 AI Deal Checker v9.9.2 — Deterministic scoring + on-screen debug reasoning. AI analysis only; verify independently.")
