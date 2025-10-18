@@ -5,3 +5,4 @@ gspread==6.1.4
 json-repair==0.6.0
 pillow
 pandas
+matplotlib==3.9.2
