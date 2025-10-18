@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# AI Deal Checker (U.S.) – Final Version (Stable + JSON Fix)
-# • English UI • USD / miles • OTD & TCO
-# • Gemini 2.5 Flash • Confidence Level • Error-safe parsing
+# AI Deal Checker (U.S.) – v2 Stable Build
+# • Handles truncated JSON gracefully
+# • Confidence bar + color scoring
+# • Gemini 2.5 Flash + JSON-repair fallback
 # ===========================================================
 
 import os, re, json, traceback
@@ -131,11 +132,8 @@ def build_us_prompt(ad: str, extra: str) -> str:
     return f"""
 You are a U.S. used-car deal checker. Analyze if the following ad is a smart buy for a U.S. consumer.
 
-If you cannot find enough data, fill with reasonable approximations.  
-You **must** return valid JSON only, without any markdown, explanation, or text outside the JSON.
-
-If you encounter any missing fields, include `"unknown"` or `0`, but **never omit keys**.  
-If you face an internal error, output JSON with `"error": "description"`.
+If you cannot find enough data, fill with reasonable approximations.
+You MUST return valid JSON only — no markdown, no explanation outside the JSON.
 
 Ad text:
 \"\"\"{ad}\"\"\"{extra}
@@ -227,13 +225,31 @@ if st.button("Check the Deal", use_container_width=True, type="primary"):
             if not raw:
                 raise ValueError("Empty response from Gemini – no content returned.")
 
+            # --- Auto-fix for truncated JSON ---
+            if not raw.endswith("}"):
+                raw += "}" * (raw.count("{") - raw.count("}"))
+            if not raw.endswith("]") and raw.count("[") > raw.count("]"):
+                raw += "]"
+
             try:
                 fixed = repair_json(raw)
                 data = json.loads(fixed)
             except Exception:
-                st.warning("⚠️ Gemini returned a non-JSON response. Raw preview:")
-                st.code(raw[:1000])
-                raise ValueError("Invalid JSON output from Gemini")
+                st.warning("⚠️ Gemini returned partial JSON — trying recovery.")
+                last_brace = raw.rfind("}")
+                if last_brace != -1:
+                    raw_cut = raw[: last_brace + 1]
+                    try:
+                        data = json.loads(raw_cut)
+                        st.success("✅ JSON repaired successfully (auto-recovered).")
+                    except Exception:
+                        st.error("❌ Could not recover JSON.")
+                        st.code(raw[:1000])
+                        raise ValueError("Invalid JSON output from Gemini")
+                else:
+                    st.error("❌ Could not detect JSON braces.")
+                    st.code(raw[:1000])
+                    raise ValueError("Invalid JSON output from Gemini")
 
             avg = get_model_avg_us(data.get("from_ad",{}).get("brand",""), data.get("from_ad",{}).get("model",""))
             if isinstance(avg,(int,float)) and isinstance(data.get("deal_score"),(int,float)):
