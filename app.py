@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.1.3
+# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.2.0
+# Full v2.0 Analyst Spec | ROI 12/24/36m | Risk Tier | Buyer Fit | Compliance
 # Auto Theme (Android + iOS Safari) | Warranty-aware Reliability | Mandatory Detailed Explanation
 # Gemini 2.5 Pro | Sheets Integration | Insurance & Depreciation Tables
 # ===========================================================
@@ -24,7 +25,7 @@ import google.generativeai as genai
 # -------------------------------------------------------------
 # CONFIG
 # -------------------------------------------------------------
-APP_VERSION = "10.1.3"
+APP_VERSION = "10.2.0"
 st.set_page_config(page_title="AI Deal Checker", page_icon="🚗", layout="centered")
 
 # --- AUTO THEME for Android + iOS Safari (No Buttons) ---
@@ -44,6 +45,7 @@ def inject_auto_theme():
       --ok: #16a34a;
       --warn: #f59e0b;
       --bad: #dc2626;
+      --chip: #eef2ff22;
     }
 
     /* Dark by system preference */
@@ -56,7 +58,6 @@ def inject_auto_theme():
         --muted: #9aa4b2;
         --track: #33415588;
       }
-      /* Prevent iOS/Android forced-dark filters on media */
       img, video, canvas, svg { filter: none !important; mix-blend-mode: normal !important; }
     }
 
@@ -77,10 +78,12 @@ def inject_auto_theme():
     hr{border:none;border-top:1px solid var(--border);margin:18px 0;}
     .expl {font-size:0.98rem; line-height:1.4;}
     .expl p{margin:6px 0;}
-    .badge { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; background:#eef2ff22; border:1px solid var(--border); }
+    .badge { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; background:var(--chip); border:1px solid var(--border); }
     .badge.warn { background:#fff7ed22; }
     .badge.err { background:#fee2e222; }
     .kpi { font-weight:600; }
+    .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+    .grid2 { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -247,7 +250,7 @@ def _needs_explanation_fix(txt: str) -> bool:
     ]
     if any(m.lower() in t.lower() for m in bad_markers):
         return True
-    if len(t) < 120:  # too short
+    if len(t) < 120:
         return True
     anchors = ["KBB", "Edmunds", "RepairPal", "iSeeCars", "NHTSA", "IIHS", "Autotrader", "Cars.com"]
     if sum(1 for a in anchors if a.lower() in t.lower()) < 2:
@@ -255,7 +258,6 @@ def _needs_explanation_fix(txt: str) -> bool:
     return False
 
 def _repair_explanation(model, parsed):
-    """Second-pass: return only a detailed explanation without changing numbers."""
     fields = {
         "from_ad": parsed.get("from_ad", {}),
         "ask_price_usd": parsed.get("ask_price_usd"),
@@ -265,6 +267,8 @@ def _repair_explanation(model, parsed):
         "components": parsed.get("components", []),
         "roi_forecast_24m": parsed.get("roi_forecast_24m", {}),
         "web_search_performed": parsed.get("web_search_performed", False),
+        "roi_forecast": parsed.get("roi_forecast", {}),
+        "risk_tier": parsed.get("risk_tier", ""),
     }
     repair_prompt = f"""
 You failed to provide a proper score_explanation. Produce ONLY the explanation text.
@@ -368,7 +372,7 @@ def classify_deal(score: float) -> str:
     return "❌ Bad deal — overpriced or carries notable risk factors."
 
 # -------------------------------------------------------------
-# PROMPT (U.S. Anchors + Mandatory Web + Edge Cases + Warranty + Explanation Contract)
+# PROMPT (v2.0 U.S. Anchors + Mandatory Web + Edge Cases + Warranty + ROI tiers + Risk/BF/Compliance)
 # -------------------------------------------------------------
 def build_prompt_us(ad:str, extra:str, must_id:str, exact_prev:dict, similar_summ:list):
     exact_json = json.dumps(exact_prev or {}, ensure_ascii=False)
@@ -387,6 +391,7 @@ Stages:
    - Demand/DOM averages; brand/model resale retention (CarEdge/iSeeCars).
    - Safety/recalls context: NHTSA; insurance risk context: IIHS (qualitative).
    - Verify warranty status via manufacturer website; if warranty expired, lower reliability and raise failure-risk weighting accordingly and explain it in the reliability section.
+   - Verify open recalls and TSBs via NHTSA/manufacturer; check lemon-law/buyback if VIN present.
    Consider U.S. realities (Rust Belt vs Sun Belt, dealer vs private, mileage normalization).
 
 Use prior only for stabilization (do NOT overfit):
@@ -404,6 +409,27 @@ Scoring rules for U.S. buyers (adjusted weights):
 - Demand/resale ~4%.
 
 Critical adjustment guidelines (U.S.-market realism):
+Edge-case heuristic layer (20 scenarios — apply in addition to base weights):
+1) OEM new engine → Reliability +25–35; Market +15; Resale +10.
+2) Used/unknown-provenance engine → ≤ +5; add caution flag (“verify installation origin”).
+3) OEM new transmission → Reliability +15; Market +10.
+4) Rebuilt / Salvage / Branded title → cap deal_score ≤ 75; ROI_expected −5.
+5) Carfax “minor damage” → −5 reliability; −5 resale (acceptable if repaired).
+6) Structural damage / airbag deployed → set ceiling ≤ 55 overall; strong warning.
+7) Repainted panels / full repaint → −5 market; −5 resale.
+8) Clean Carfax + 1 owner + dealer maintained → +10 reliability; +10 resale.
+9) High-insurance states (MI, NY, NJ, FL) → −5 TCO; mention insurance context.
+10) Sun Belt (FL, AZ, CA, TX, NV) → +5 rust; −2 interior (sun wear) if hinted.
+11) Rust Belt origin/operation → −10 rust; add underbody inspection warning.
+12) Suspiciously low miles for age with no documentation → −10 reliability until explained.
+13) Fleet/Rental history → −10 reliability; −10 resale.
+14) Private owner + full service records → +10 reliability; +5 resale.
+15) High-performance trims (AMG/M/M S-line/Hellcat) → +10 demand/market; −5 TCO (insurance).
+16) Extensive aftermarket mods/tuning → −10 resale; −5 reliability (unless track-documented).
+17) Canada-import / grey market → −10 market; −10 resale; mention potential registration/insurance frictions.
+18) Major recall fixed with proof → +5 reliability.
+19) Hybrid/EV traction battery recently replaced → +20 reliability; +10 resale.
+20) “As-is” sale with no warranty → −10 confidence; −10 resale; emphasize PPI.
 • If listing text mentions any of these keywords:
   ["new engine", "engine replaced", "factory engine replaced", "rebuilt transmission", "new transmission", "engine under warranty", "factory rebuild", "powertrain warranty", "short block replaced"]
   → Apply a strong positive adjustment:
@@ -416,15 +442,15 @@ Critical adjustment guidelines (U.S.-market realism):
   → Moderate/neutral (+10–15 total) and flag provenance uncertainty.
 • Align numeric component scores with narrative (no contradictions).
 
-Edge-case heuristic layer (20 scenarios — apply in addition to base weights) — same as previous spec.
+Edge-case heuristic layer (20 scenarios — apply in addition to base weights).
 
 Explanation contract (MANDATORY):
-- Return a specific, human-readable explanation that ties PRICE vs CLEAN median, TITLE, MILEAGE, RELIABILITY/MAINTENANCE (with U.S. sources), warranty status, and ROI.
+- Return a specific, human-readable explanation tying PRICE vs CLEAN median, TITLE, MILEAGE, RELIABILITY/MAINTENANCE (with U.S. sources), warranty status, and ROI.
 - 120–400 words, 3–6 bullets/short paragraphs.
 - Mention at least two anchors by name (KBB, Edmunds, RepairPal, iSeeCars, etc.).
 - DO NOT copy any instruction text or placeholders.
 
-Return STRICT JSON only:
+Output STRICT JSON only:
 {{
   "from_ad": {{"brand":"","model":"","year":null,"vin":"","seller_type":""}},
   "ask_price_usd": 0,
@@ -450,6 +476,12 @@ Return STRICT JSON only:
   ],
   "deal_score": 0,
   "roi_forecast_24m": {{"expected":0,"optimistic":0,"pessimistic":0}},
+  "roi_forecast": {{"12m":0,"24m":0,"36m":0}},
+  "risk_tier": "Tier 2 (average-risk)",
+  "relative_rank": "",
+  "buyer_fit": "",
+  "verification_summary": "",
+  "benchmark": {{"segment":"","rivals":[]}},
   "score_explanation": "<<WRITE DETAILED EXPLANATION — NO PLACEHOLDERS>>",
   "listing_id_used": "{must_id}"
 }}
@@ -465,6 +497,7 @@ Hard constraints:
 - Per-component short notes required.
 - If title_status is 'rebuilt', 'salvage' or any branded title: CAP deal_score ≤ 75 and clearly warn in score_explanation.
 - If market gap (gap_pct) ≤ -35: warn to verify insurance/accident history before purchase.
+- Enforce alignment between narrative and component scores (no contradictions).
 """
 
 # -------------------------------------------------------------
@@ -485,10 +518,10 @@ with c3: seller = st.selectbox("Seller type", ["","private","dealer"], key="sell
 
 def build_extra(vin, zip_code, seller, imgs):
     extra = ""
-    if vin: extra += f"\nVIN: {vin}"
-    if zip_code: extra += f"\nZIP/State: {zip_code}"
-    if seller: extra += f"\nSeller: {seller}"
-    if imgs: extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
+    if vin: extra += f"\\nVIN: {vin}"
+    if zip_code: extra += f"\\nZIP/State: {zip_code}"
+    if seller: extra += f"\\nSeller: {seller}"
+    if imgs: extra += f"\\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
 
 # -------------------------------------------------------------
@@ -507,11 +540,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     history = load_history()
     exact_prev = next((h for h in history if h.get("unique_ad_id") == must_id), None)
 
-    current_struct = {
-        "raw_text": ad,
-        "price_guess": price_guess,
-        "zip_or_state": zip_code or "",
-    }
+    current_struct = {"raw_text": ad, "price_guess": price_guess, "zip_or_state": zip_code or ""}
 
     sims = []
     for h in history:
@@ -522,12 +551,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         }
         s = similarity_score(current_struct, prior_struct)
         if s >= 0.85 and h.get("unique_ad_id") != must_id:
-            sims.append({
-                "id": h.get("unique_ad_id"),
-                "score": h.get("deal_score"),
-                "when": h.get("timestamp",""),
-                "sim": round(s,3)
-            })
+            sims.append({"id": h.get("unique_ad_id"), "score": h.get("deal_score"), "when": h.get("timestamp",""), "sim": round(s,3)})
     sims = sorted(sims, key=lambda x: -x["sim"])[:5]
     similar_avg = None
     if sims:
@@ -560,9 +584,14 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
 
     # ---- Sanity clamp ----
     base_score = clip(data.get("deal_score", 60), 0, 100)
-    roi = data.get("roi_forecast_24m", {}) or {}
+    roi24 = data.get("roi_forecast_24m", {}) or {}
     for k in ["expected","optimistic","pessimistic"]:
-        roi[k] = clip(roi.get(k,0), -50, 50)
+        roi24[k] = clip(roi24.get(k,0), -50, 50)
+
+    # New ROI triple
+    roi_triple = data.get("roi_forecast", {}) or {}
+    for k in ["12m","24m","36m"]:
+        roi_triple[k] = clip(roi_triple.get(k,0), -50, 50)
 
     facts = data.get("vehicle_facts", {}) or {}
     title_status = str(facts.get("title_status","unknown")).strip().lower()
@@ -580,22 +609,19 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
 
     prev_roi = (exact_prev or {}).get("roi_forecast_24m", {}) if exact_prev else None
     if exact_prev and sims and similar_avg is not None:
-        roi["expected"] = round(
-            0.80*roi["expected"] + 0.15*float((prev_roi or {}).get("expected", roi["expected"])) + 0.05*(similar_avg or roi["expected"]),
-            1
-        )
+        roi24["expected"] = round(0.80*roi24.get("expected",0) + 0.15*float((prev_roi or {}).get("expected", roi24.get("expected",0))) + 0.05*(similar_avg or roi24.get("expected",0)), 1)
     elif exact_prev:
-        try_prev = float((prev_roi or {}).get("expected", roi.get("expected", 0)))
-        roi["expected"] = round(0.75*roi.get("expected",0) + 0.25*try_prev, 1)
+        try_prev = float((prev_roi or {}).get("expected", roi24.get("expected", 0)))
+        roi24["expected"] = round(0.75*roi24.get("expected",0) + 0.25*try_prev, 1)
     elif similar_avg is not None:
-        roi["expected"] = round(0.90*roi.get("expected",0) + 0.10*(similar_avg or 0), 1)
+        roi24["expected"] = round(0.90*roi24.get("expected",0) + 0.10*(similar_avg or 0), 1)
 
     # ---- Strict rebuilt/salvage handling (cap + ROI penalty + warnings) ----
     warnings_ui = []
     branded = title_status in {"rebuilt","salvage","branded","flood","lemon"}
     if branded:
         final_score = min(75.0, final_score - 5.0)
-        roi["expected"] = round(roi.get("expected", 0) - 5.0, 1)
+        roi24["expected"] = round(roi24.get("expected", 0) - 5.0, 1)
         warnings_ui.append("Branded/salvage title detected — insurers and lenders may limit options; resale harder.")
 
     # ---- Rust belt / insurance context adjustments (light-touch) ----
@@ -604,7 +630,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     if re.fullmatch(r"[A-Z]{2}", state_or_zip):
         state_code = state_or_zip
     elif re.fullmatch(r"\d{5}", state_or_zip):
-        state_code = ""  # offline
+        state_code = ""
 
     if state_code in RUST_BELT_STATES:
         final_score = round(final_score - 1.5, 1)
@@ -618,11 +644,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     # ---- Components → human text lines (safe-escaped)
     comp_lines = []
     components = data.get("components", []) or []
-    ctx_for_exp = {
-        "market_refs": market_refs,
-        "vehicle_facts": facts,
-        "from_ad": data.get("from_ad") or {}
-    }
+    ctx_for_exp = {"market_refs": market_refs, "vehicle_facts": facts, "from_ad": data.get("from_ad") or {}}
     for c in components:
         name = c.get("name","")
         score = c.get("score", 0)
@@ -672,19 +694,46 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         st.markdown(f"**Title:** {html.escape(title_status or 'unknown')}")
         st.markdown(f"**Location:** {html.escape(state_or_zip or '—')}")
 
-    st.markdown("### 24-Month ROI Forecast")
-    roi_cols = st.columns(3)
-    with roi_cols[0]:
-        st.metric("Expected", f"{roi.get('expected',0):+.1f}%")
-    with roi_cols[1]:
-        st.metric("Optimistic", f"{roi.get('optimistic',0):+.1f}%")
-    with roi_cols[2]:
-        st.metric("Pessimistic", f"{roi.get('pessimistic',0):+.1f}%")
-
     # score explanation (model text, escaped)
-    score_exp = html.escape(raw_exp).replace("\n","<br/>")
+    score_exp = html.escape(raw_exp).replace("\\n","<br/>")
     if score_exp:
         st.markdown(f"<div class='section card'><b>Why this score?</b><br/>{score_exp}</div>", unsafe_allow_html=True)
+
+    # ===== ROI & Risk Tier AFTER explanation (as requested) =====
+    st.markdown("### ROI Forecast (12/24/36 months) & Risk Tier")
+    rcols = st.columns(3)
+    with rcols[0]:
+        st.metric("12m ROI", f"{roi_triple.get('12m', 0):+.1f}%")
+    with rcols[1]:
+        st.metric("24m ROI", f"{roi_triple.get('24m', 0):+.1f}%")
+    with rcols[2]:
+        st.metric("36m ROI", f"{roi_triple.get('36m', 0):+.1f}%")
+
+    # Legacy 24-month triplet (kept for backward compatibility)
+    st.markdown("<div class='section'><small class='muted'>Legacy 24m forecast kept for compatibility</small></div>", unsafe_allow_html=True)
+    r2 = st.columns(3)
+    with r2[0]:
+        st.metric("Expected (24m)", f"{roi24.get('expected',0):+.1f}%")
+    with r2[1]:
+        st.metric("Optimistic (24m)", f"{roi24.get('optimistic',0):+.1f}%")
+    with r2[2]:
+        st.metric("Pessimistic (24m)", f"{roi24.get('pessimistic',0):+.1f}%")
+
+    # Risk Tier & Buyer Fit
+    rt = data.get("risk_tier","").strip() or "Tier 2 (average-risk)"
+    bf = data.get("buyer_fit","").strip()
+    rr = data.get("relative_rank","").strip()
+    verif = data.get("verification_summary","").strip()
+
+    st.markdown("<div class='section card'>", unsafe_allow_html=True)
+    st.markdown(f"**Risk Tier:** {html.escape(rt)}", unsafe_allow_html=True)
+    if rr:
+        st.markdown(f"**Relative Rank:** {html.escape(rr)}", unsafe_allow_html=True)
+    if bf:
+        st.markdown(f"**Buyer Fit:** {html.escape(bf)}", unsafe_allow_html=True)
+    if verif:
+        st.markdown(f"**Compliance/Verification:** {html.escape(verif)}", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # component breakdown (safe)
     if comp_lines:
@@ -695,11 +744,12 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         st.info("No component breakdown available.")
 
     # warnings block
+    warnings_ui = list(dict.fromkeys(warnings_ui))  # dedupe
     if warnings_ui:
         warn_html = "".join([f"<li>{html.escape(w)}</li>" for w in warnings_ui])
         st.markdown(f"<div class='section card'><b>Warnings</b><ul>{warn_html}</ul></div>", unsafe_allow_html=True)
 
-    # web lookup badge — fixed syntax (no illegal backslashes)
+    # web lookup badge
     web_done = bool(data.get("web_search_performed", False))
     st.markdown(
         f"<div class='section'>Web lookup: "
@@ -722,10 +772,16 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         "deal_score": final_score,
         "confidence_level": round(confidence/100, 3),
         "market_refs": market_refs,
-        "roi_forecast_24m": roi,
+        "roi_forecast_24m": roi24,
+        "roi_forecast": roi_triple,
+        "risk_tier": rt,
+        "relative_rank": rr,
+        "buyer_fit": bf,
+        "verification_summary": verif,
         "web_search_performed": web_done
     }
     try:
+        # keep same columns in Sheets (do not alter secrets/structure)
         save_history(out_entry)
     except Exception as e:
         st.warning(f"Local save failed: {e}")
