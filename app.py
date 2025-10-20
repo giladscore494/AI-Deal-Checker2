@@ -29,7 +29,7 @@ st.set_page_config(page_title="AI Deal Checker", page_icon="🚗", layout="cente
 
 # --- AUTO THEME for Android + iOS Safari (No Buttons) ---
 def inject_auto_theme():
-    st.markdown(\"\"\"
+    st.markdown("""
     <style>
     :root { color-scheme: light dark; }
 
@@ -82,9 +82,9 @@ def inject_auto_theme():
     .badge.err { background:#fee2e222; }
     .kpi { font-weight:600; }
     </style>
-    \"\"\", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-    st.markdown(\"\"\"
+    st.markdown("""
     <script>
     (function(){
       try {
@@ -98,7 +98,7 @@ def inject_auto_theme():
       } catch(e) {}
     })();
     </script>
-    \"\"\", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 inject_auto_theme()
 
@@ -168,8 +168,8 @@ def clip(x, lo, hi):
 
 def extract_price_from_text(txt:str):
     if not txt: return None
-    t = re.sub(r'\\s+', ' ', txt)
-    m = re.search(r'(?i)(?:\\$?\\s*)(\\d{1,3}(?:,\\d{3})+|\\d{4,6})(?:\\s*usd)?', t)
+    t = re.sub(r'\s+', ' ', txt)
+    m = re.search(r'(?i)(?:\$?\s*)(\d{1,3}(?:,\d{3})+|\d{4,6})(?:\s*usd)?', t)
     if m:
         try:
             return float(m.group(1).replace(',', ''))
@@ -255,7 +255,7 @@ def _needs_explanation_fix(txt: str) -> bool:
     return False
 
 def _repair_explanation(model, parsed):
-    \"\"\"Second-pass: return only a detailed explanation without changing numbers.\"\"\"
+    """Second-pass: return only a detailed explanation without changing numbers."""
     fields = {
         "from_ad": parsed.get("from_ad", {}),
         "ask_price_usd": parsed.get("ask_price_usd"),
@@ -266,7 +266,7 @@ def _repair_explanation(model, parsed):
         "roi_forecast_24m": parsed.get("roi_forecast_24m", {}),
         "web_search_performed": parsed.get("web_search_performed", False),
     }
-    repair_prompt = f\"\"\"
+    repair_prompt = f"""
 You failed to provide a proper score_explanation. Produce ONLY the explanation text.
 Constraints:
 - 120–400 words; 3–6 concise bullets or short paragraphs.
@@ -277,7 +277,7 @@ Constraints:
 
 Context (immutable numbers):
 {json.dumps(fields, ensure_ascii=False)}
-\"\"\"
+"""
     try:
         r2 = model.generate_content([{"text": repair_prompt}], request_options={"timeout": 120})
         txt = (getattr(r2, "text", "") or "").strip().replace("```", "").strip()
@@ -373,7 +373,7 @@ def classify_deal(score: float) -> str:
 def build_prompt_us(ad:str, extra:str, must_id:str, exact_prev:dict, similar_summ:list):
     exact_json = json.dumps(exact_prev or {}, ensure_ascii=False)
     similar_json = json.dumps(similar_summ or [], ensure_ascii=False)
-    return f\"\"\"
+    return f"""
 You are a senior U.S. used-car analyst (2023–2025). Web reasoning is REQUIRED.
 
 Stages:
@@ -465,7 +465,7 @@ Hard constraints:
 - Per-component short notes required.
 - If title_status is 'rebuilt', 'salvage' or any branded title: CAP deal_score ≤ 75 and clearly warn in score_explanation.
 - If market gap (gap_pct) ≤ -35: warn to verify insurance/accident history before purchase.
-\"\"\"
+"""
 
 # -------------------------------------------------------------
 # UI (inputs) — NO theme controls
@@ -485,10 +485,10 @@ with c3: seller = st.selectbox("Seller type", ["","private","dealer"], key="sell
 
 def build_extra(vin, zip_code, seller, imgs):
     extra = ""
-    if vin: extra += f"\\nVIN: {vin}"
-    if zip_code: extra += f"\\nZIP/State: {zip_code}"
-    if seller: extra += f"\\nSeller: {seller}"
-    if imgs: extra += f"\\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
+    if vin: extra += f"\nVIN: {vin}"
+    if zip_code: extra += f"\nZIP/State: {zip_code}"
+    if seller: extra += f"\nSeller: {seller}"
+    if imgs: extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
 
 # -------------------------------------------------------------
@@ -603,7 +603,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     state_code = ""
     if re.fullmatch(r"[A-Z]{2}", state_or_zip):
         state_code = state_or_zip
-    elif re.fullmatch(r"\\d{5}", state_or_zip):
+    elif re.fullmatch(r"\d{5}", state_or_zip):
         state_code = ""  # offline
 
     if state_code in RUST_BELT_STATES:
@@ -682,7 +682,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         st.metric("Pessimistic", f"{roi.get('pessimistic',0):+.1f}%")
 
     # score explanation (model text, escaped)
-    score_exp = html.escape(raw_exp).replace("\\n","<br/>")
+    score_exp = html.escape(raw_exp).replace("\n","<br/>")
     if score_exp:
         st.markdown(f"<div class='section card'><b>Why this score?</b><br/>{score_exp}</div>", unsafe_allow_html=True)
 
