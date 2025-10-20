@@ -305,7 +305,7 @@ def build_prompt_us(ad:str, extra:str, must_id:str, exact_prev:dict, similar_sum
     similar_json = json.dumps(similar_summ or [], ensure_ascii=False)
     return f"""
 You are a senior U.S. used-car analyst (2023–2025). Web reasoning is REQUIRED.
-
+**Verify warranty status via manufacturer website; if warranty expired, lower reliability and raise failure-risk weighting accordingly and explain it on the reliability In the detailed explanation of reliability|**
 Stages:
 1) Extract listing facts: ask_price_usd, brand, model, year, trim, powertrain, miles, title_status, owners, accidents,
    options_value_usd, state_or_zip, days_on_market (if present).
