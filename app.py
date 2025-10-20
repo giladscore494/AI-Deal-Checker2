@@ -596,13 +596,13 @@ with c3:
 def build_extra(vin, zip_code, seller, imgs):
     extra = ""
     if vin:
-        extra += f"\\nVIN: {vin}"
+        extra += f"\nVIN: {vin}"
     if zip_code:
-        extra += f"\\nZIP/State: {zip_code}"
+        extra += f"\nZIP/State: {zip_code}"
     if seller:
-        extra += f"\\nSeller: {seller}"
+        extra += f"\nSeller: {seller}"
     if imgs:
-        extra += f"\\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
+        extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
 
 # -------------------------------------------------------------
@@ -839,12 +839,12 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         warn_html = "".join([f"<li>{html.escape(w)}</li>" for w in warnings_ui])
         st.markdown(f"<div class='section card'><b>Warnings</b><ul>{warn_html}</ul></div>", unsafe_allow_html=True)
 
-    # web lookup badge
+    # web lookup badge (FIXED: avoid nested braces causing unmatched ')')
     web_done = bool(data.get("web_search_performed", False))
+    status_text = "performed" if web_done else "NOT performed (model fallback)"
+    badge_class = "badge" + (" warn" if not web_done else "")
     st.markdown(
-        f"<div class='section'>Web lookup: "
-        f"<span class='badge {'warn' if not web_done else ''}'>"
-        f"{'NOT performed (model fallback)' if not web_done else 'performed'}</span></div>",
+        f"<div class='section'>Web lookup: <span class='{badge_class}'>{status_text}</span></div>",
         unsafe_allow_html=True,
     )
 
