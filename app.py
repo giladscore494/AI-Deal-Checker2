@@ -30,8 +30,7 @@ st.set_page_config(page_title="AI Deal Checker", page_icon="🚗", layout="cente
 
 # --- AUTO THEME for Android + iOS Safari (No Buttons) ---
 def inject_auto_theme():
-    st.markdown(
-        """
+    st.markdown("""
     <style>
     :root { color-scheme: light dark; }
 
@@ -86,12 +85,9 @@ def inject_auto_theme():
     .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
     .grid2 { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
     </style>
-    """,
-        unsafe_allow_html=True,
-    )
+    """, unsafe_allow_html=True)
 
-    st.markdown(
-        """
+    st.markdown("""
     <script>
     (function(){
       try {
@@ -105,16 +101,12 @@ def inject_auto_theme():
       } catch(e) {}
     })();
     </script>
-    """,
-        unsafe_allow_html=True,
-    )
+    """, unsafe_allow_html=True)
 
 inject_auto_theme()
 
 st.title("🚗 AI Deal Checker")
-st.caption(
-    f"U.S. Edition (Pro) v{APP_VERSION} | Auto Theme • KBB/Edmunds/RepairPal/iSeeCars anchors • Insurance & Depreciation • ROI Forecasting (Gemini 2.5 Pro)"
-)
+st.caption(f"U.S. Edition (Pro) v{APP_VERSION} | Auto Theme • KBB/Edmunds/RepairPal/iSeeCars anchors • Insurance & Depreciation • ROI Forecasting (Gemini 2.5 Pro)")
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
@@ -146,25 +138,13 @@ if SHEET_ID and SERVICE_JSON and gspread and Credentials:
 # -------------------------------------------------------------
 # U.S.-SPECIFIC TABLES
 # -------------------------------------------------------------
-RUST_BELT_STATES = {"IL", "MI", "OH", "WI", "PA", "NY", "MN", "IN", "MA", "NJ"}
-SUN_BELT_STATES = {"FL", "AZ", "TX", "NV", "CA"}
+RUST_BELT_STATES = {"IL","MI","OH","WI","PA","NY","MN","IN","MA","NJ"}
+SUN_BELT_STATES = {"FL","AZ","TX","NV","CA"}
 
 DEPRECIATION_TABLE = {
-    "MAZDA": -14,
-    "HONDA": -13,
-    "TOYOTA": -12,
-    "BMW": -22,
-    "FORD": -19,
-    "CHEVROLET": -18,
-    "TESLA": -9,
-    "KIA": -17,
-    "HYUNDAI": -16,
-    "SUBARU": -14,
-    "NISSAN": -17,
-    "VOLKSWAGEN": -18,
-    "JEEP": -21,
-    "MERCEDES": -23,
-    "AUDI": -22,
+    "MAZDA": -14, "HONDA": -13, "TOYOTA": -12, "BMW": -22, "FORD": -19,
+    "CHEVROLET": -18, "TESLA": -9, "KIA": -17, "HYUNDAI": -16, "SUBARU": -14,
+    "NISSAN": -17, "VOLKSWAGEN": -18, "JEEP": -21, "MERCEDES": -23, "AUDI": -22
 }
 
 INSURANCE_COST = {"MI": 2800, "FL": 2400, "NY": 2300, "OH": 1100, "TX": 1700, "CA": 1800, "AZ": 1400, "IL": 1500}
@@ -175,66 +155,54 @@ INSURANCE_COST = {"MI": 2800, "FL": 2400, "NY": 2300, "OH": 1100, "TX": 1700, "C
 def meter(label, value, suffix=""):
     try:
         v = float(value)
-    except Exception:
+    except:
         v = 0
     v = max(0, min(100, v))
-    css = "fill-ok" if v >= 70 else ("fill-warn" if v >= 40 else "fill-bad")
-    st.markdown(
-        f"<div class='metric'><b>{html.escape(str(label))}</b><span class='kpi'>{int(v)}{html.escape(str(suffix))}</span></div>",
-        unsafe_allow_html=True,
-    )
+    css = 'fill-ok' if v >= 70 else ('fill-warn' if v >= 40 else 'fill-bad')
+    st.markdown(f"<div class='metric'><b>{html.escape(str(label))}</b><span class='kpi'>{int(v)}{html.escape(str(suffix))}</span></div>", unsafe_allow_html=True)
     st.markdown(f"<div class='progress'><div class='{css}' style='width:{v}%'></div></div>", unsafe_allow_html=True)
-
 
 def clip(x, lo, hi):
     try:
         x = float(x)
-    except Exception:
+    except:
         x = 0.0
     return max(lo, min(hi, x))
 
-
-def extract_price_from_text(txt: str):
-    if not txt:
-        return None
-    t = re.sub(r"\s+", " ", txt)
-    m = re.search(r"(?i)(?:\$?\s*)(\d{1,3}(?:,\d{3})+|\d{4,6})(?:\s*usd)?", t)
+def extract_price_from_text(txt:str):
+    if not txt: return None
+    t = re.sub(r'\s+', ' ', txt)
+    m = re.search(r'(?i)(?:\$?\s*)(\d{1,3}(?:,\d{3})+|\d{4,6})(?:\s*usd)?', t)
     if m:
         try:
-            return float(m.group(1).replace(",", ""))
-        except Exception:
+            return float(m.group(1).replace(',', ''))
+        except:
             return None
     return None
 
-
-def parse_json_safe(raw: str):
+def parse_json_safe(raw:str):
     raw = (raw or "").replace("```json", "").replace("```", "").strip()
     try:
         return json.loads(raw)
-    except Exception:
+    except:
         return json.loads(repair_json(raw))
-
 
 def unique_ad_id(ad_text, vin, zip_or_state, price_guess, seller):
     base = (vin.strip().upper() if vin else f"{ad_text[:160]}|{price_guess}|{zip_or_state}|{seller}".lower())
     return hashlib.md5(base.encode()).hexdigest()[:12]
 
-
 def token_set(text):
-    if not text:
-        return set()
-    t = re.sub(r"[^a-z0-9 ]+", " ", str(text).lower())
-    return {w for w in t.split() if len(w) > 2}
-
+    if not text: return set()
+    t = re.sub(r'[^a-z0-9 ]+', ' ', str(text).lower())
+    return set([w for w in t.split() if len(w) > 2])
 
 def similarity_score(ad_a, ad_b):
     ta, tb = token_set(ad_a.get("raw_text")), token_set(ad_b.get("raw_text"))
     j = len(ta & tb) / max(1, len(ta | tb))
     p_a, p_b = float(ad_a.get("price_guess") or 0), float(ad_b.get("price_guess") or 0)
     price_sim = 1.0 - min(1.0, abs(p_a - p_b) / max(1000.0, max(p_a, p_b, 1.0)))
-    loc_sim = 1.0 if (ad_a.get("zip_or_state") == ad_b.get("zip_or_state")) else 0.7
-    return 0.6 * j + 0.3 * price_sim + 0.1 * loc_sim
-
+    loc_sim = 1.0 if (ad_a.get("zip_or_state")==ad_b.get("zip_or_state")) else 0.7
+    return 0.6*j + 0.3*price_sim + 0.1*loc_sim
 
 def load_history():
     if os.path.exists(LOCAL_FILE):
@@ -245,12 +213,9 @@ def load_history():
             return []
     return []
 
-
 def save_history(entry):
-    data = load_history()
-    data.append(entry)
-    if len(data) > MEMORY_LIMIT:
-        data = data[-MEMORY_LIMIT:]
+    data = load_history(); data.append(entry)
+    if len(data) > MEMORY_LIMIT: data = data[-MEMORY_LIMIT:]
     with open(LOCAL_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     if sheet:
@@ -260,23 +225,13 @@ def save_history(entry):
             roi = entry.get("roi_forecast_24m", {}) or {}
             gaps = entry.get("market_refs", {}) or {}
             uid = entry.get("unique_ad_id", "")
-            sheet.append_row(
-                [
-                    ts,
-                    fa.get("brand", ""),
-                    fa.get("model", ""),
-                    fa.get("year", ""),
-                    entry.get("deal_score", ""),
-                    roi.get("expected", ""),
-                    entry.get("web_search_performed", ""),
-                    entry.get("confidence_level", ""),
-                    gaps.get("median_clean", ""),
-                    gaps.get("gap_pct", ""),
-                    uid,
-                    fa.get("state_or_zip", ""),
-                ],
-                value_input_option="USER_ENTERED",
-            )
+            sheet.append_row([
+                ts, fa.get("brand",""), fa.get("model",""), fa.get("year",""),
+                entry.get("deal_score",""), roi.get("expected",""),
+                entry.get("web_search_performed",""), entry.get("confidence_level",""),
+                gaps.get("median_clean",""), gaps.get("gap_pct",""),
+                uid, fa.get("state_or_zip","")
+            ], value_input_option="USER_ENTERED")
         except Exception as e:
             st.warning(f"Sheets write failed: {e}")
 
@@ -291,7 +246,7 @@ def _needs_explanation_fix(txt: str) -> bool:
         "Plain-English rationale summarizing",
         "Write the explanation here",
         "DO NOT COPY ANY PLACEHOLDER",
-        "Always avoid narrative/score contradictions",
+        "Always avoid narrative/score contradictions"
     ]
     if any(m.lower() in t.lower() for m in bad_markers):
         return True
@@ -301,7 +256,6 @@ def _needs_explanation_fix(txt: str) -> bool:
     if sum(1 for a in anchors if a.lower() in t.lower()) < 2:
         return True
     return False
-
 
 def _repair_explanation(model, parsed):
     fields = {
@@ -340,28 +294,20 @@ Context (immutable numbers):
 # -------------------------------------------------------------
 # HUMAN EXPLANATION ENGINE (U.S. Edition)
 # -------------------------------------------------------------
-def explain_component(name: str, score: float, note: str = "", ctx: dict = None) -> str:
+def explain_component(name:str, score:float, note:str="", ctx:dict=None) -> str:
     s = clip(score, 0, 100)
     n = (note or "").strip()
     name_l = (name or "").lower().strip()
 
-    if s >= 90:
-        level = "excellent"
-    elif s >= 80:
-        level = "very good"
-    elif s >= 70:
-        level = "good"
-    elif s >= 60:
-        level = "adequate"
-    elif s >= 50:
-        level = "below average"
-    elif s >= 40:
-        level = "weak"
-    else:
-        level = "poor"
+    if s >= 90: level = "excellent"
+    elif s >= 80: level = "very good"
+    elif s >= 70: level = "good"
+    elif s >= 60: level = "adequate"
+    elif s >= 50: level = "below average"
+    elif s >= 40: level = "weak"
+    else: level = "poor"
 
     base = ""
-    ctx = ctx or {}
     if name_l == "market":
         gap = None
         try:
@@ -380,8 +326,8 @@ def explain_component(name: str, score: float, note: str = "", ctx: dict = None)
         else:
             base = f"Price vs U.S. comps is {level}."
     elif name_l == "title":
-        ts = str(((ctx.get("vehicle_facts") or {}).get("title_status", "unknown"))).lower()
-        if ts in {"rebuilt", "salvage", "branded", "flood", "lemon"}:
+        ts = str(((ctx.get("vehicle_facts") or {}).get("title_status","unknown"))).lower()
+        if ts in {"rebuilt","salvage","branded","flood","lemon"}:
             base = "Branded title — resale & insurance limited; extra due diligence required."
         elif ts == "clean":
             base = "Clean title — typical U.S. insurability & resale."
@@ -408,16 +354,15 @@ def explain_component(name: str, score: float, note: str = "", ctx: dict = None)
     else:
         base = f"{name.capitalize()} factor is {level}."
 
-    brand = str((ctx.get("from_ad") or {}).get("brand", "")).upper()
-    if brand in {"TOYOTA", "HONDA", "MAZDA", "SUBARU"} and name_l in {"reliability", "resale_value"}:
+    brand = str((ctx.get("from_ad") or {}).get("brand","")).upper()
+    if brand in {"TOYOTA","HONDA","MAZDA","SUBARU"} and name_l in {"reliability","resale_value"}:
         base += " Japanese-brand advantage recognized."
-    if brand in {"FORD", "CHEVROLET", "JEEP"} and name_l in {"depreciation", "resale_value"}:
+    if brand in {"FORD","CHEVROLET","JEEP"} and name_l in {"depreciation","resale_value"}:
         base += " Verify 3-year depreciation trend for domestic brands."
 
     if n:
         return f"{name.capitalize()} — {int(s)}/100 → {base} ({n})"
     return f"{name.capitalize()} — {int(s)}/100 → {base}"
-
 
 def classify_deal(score: float) -> str:
     if score >= 80:
@@ -429,7 +374,7 @@ def classify_deal(score: float) -> str:
 # -------------------------------------------------------------
 # PROMPT (v2.0 U.S. Anchors + Mandatory Web + Edge Cases + Warranty + ROI tiers + Risk/BF/Compliance)
 # -------------------------------------------------------------
-def build_prompt_us(ad: str, extra: str, must_id: str, exact_prev: dict, similar_summ: list):
+def build_prompt_us(ad:str, extra:str, must_id:str, exact_prev:dict, similar_summ:list):
     exact_json = json.dumps(exact_prev or {}, ensure_ascii=False)
     similar_json = json.dumps(similar_summ or [], ensure_ascii=False)
     return f"""
@@ -569,7 +514,6 @@ Hard constraints:
 - If market gap (gap_pct) ≤ -35: warn to verify insurance/accident history before purchase.
 - Enforce alignment between narrative and component scores (no contradictions).
 """
-    )
 
 # -------------------------------------------------------------
 # UI (inputs) — NO theme controls
@@ -581,28 +525,18 @@ ad = st.text_area(
     placeholder="Year • Make • Model • Trim • Mileage • Price • Title • Location • Options ...",
     key="ad_text_main",
 )
-imgs = st.file_uploader(
-    "Upload photos (optional):", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="images_uploader"
-)
+imgs = st.file_uploader("Upload photos (optional):", type=["jpg","jpeg","png"], accept_multiple_files=True, key="images_uploader")
 c1, c2, c3 = st.columns(3)
-with c1:
-    vin = st.text_input("VIN (optional)", key="vin_input")
-with c2:
-    zip_code = st.text_input("ZIP / State (e.g., 44105 or OH)", key="zip_input")
-with c3:
-    seller = st.selectbox("Seller type", ["", "private", "dealer"], key="seller_select")
-
+with c1: vin = st.text_input("VIN (optional)", key="vin_input")
+with c2: zip_code = st.text_input("ZIP / State (e.g., 44105 or OH)", key="zip_input")
+with c3: seller = st.selectbox("Seller type", ["","private","dealer"], key="seller_select")
 
 def build_extra(vin, zip_code, seller, imgs):
     extra = ""
-    if vin:
-        extra += f"\nVIN: {vin}"
-    if zip_code:
-        extra += f"\nZIP/State: {zip_code}"
-    if seller:
-        extra += f"\nSeller: {seller}"
-    if imgs:
-        extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
+    if vin: extra += f"\\nVIN: {vin}"
+    if zip_code: extra += f"\\nZIP/State: {zip_code}"
+    if seller: extra += f"\\nSeller: {seller}"
+    if imgs: extra += f"\\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
 
 # -------------------------------------------------------------
@@ -628,18 +562,16 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         prior_struct = {
             "raw_text": h.get("raw_text") or "",
             "price_guess": extract_price_from_text(h.get("raw_text") or "") or 0,
-            "zip_or_state": (h.get("from_ad") or {}).get("state_or_zip", ""),
+            "zip_or_state": (h.get("from_ad") or {}).get("state_or_zip","")
         }
         s = similarity_score(current_struct, prior_struct)
         if s >= 0.85 and h.get("unique_ad_id") != must_id:
-            sims.append(
-                {"id": h.get("unique_ad_id"), "score": h.get("deal_score"), "when": h.get("timestamp", ""), "sim": round(s, 3)}
-            )
+            sims.append({"id": h.get("unique_ad_id"), "score": h.get("deal_score"), "when": h.get("timestamp",""), "sim": round(s,3)})
     sims = sorted(sims, key=lambda x: -x["sim"])[:5]
     similar_avg = None
     if sims:
-        vals = [v["score"] for v in sims if isinstance(v.get("score"), (int, float))]
-        similar_avg = round(sum(vals) / len(vals), 2) if vals else None
+        vals = [v["score"] for v in sims if isinstance(v.get("score"), (int,float))]
+        similar_avg = round(sum(vals)/len(vals), 2) if vals else None
 
     # ---- Build prompt & send (with memory anchors + images) ----
     parts = [{"text": build_prompt_us(ad, extra, must_id, exact_prev or {}, sims)}]
@@ -668,45 +600,40 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     # ---- Sanity clamp ----
     base_score = clip(data.get("deal_score", 60), 0, 100)
     roi24 = data.get("roi_forecast_24m", {}) or {}
-    for k in ["expected", "optimistic", "pessimistic"]:
-        roi24[k] = clip(roi24.get(k, 0), -50, 50)
+    for k in ["expected","optimistic","pessimistic"]:
+        roi24[k] = clip(roi24.get(k,0), -50, 50)
 
     # New ROI triple
     roi_triple = data.get("roi_forecast", {}) or {}
-    for k in ["12m", "24m", "36m"]:
-        roi_triple[k] = clip(roi_triple.get(k, 0), -50, 50)
+    for k in ["12m","24m","36m"]:
+        roi_triple[k] = clip(roi_triple.get(k,0), -50, 50)
 
     facts = data.get("vehicle_facts", {}) or {}
-    title_status = str(facts.get("title_status", "unknown")).strip().lower()
+    title_status = str(facts.get("title_status","unknown")).strip().lower()
     market_refs = data.get("market_refs", {}) or {}
     gap_pct = float(market_refs.get("gap_pct", 0)) if market_refs.get("gap_pct") is not None else 0.0
 
     # ---- Memory stabilization (score + ROI expected) ----
     final_score = base_score
     if exact_prev and sims and similar_avg is not None:
-        final_score = round(0.80 * base_score + 0.15 * float(exact_prev.get("deal_score", base_score)) + 0.05 * similar_avg, 1)
+        final_score = round(0.80*base_score + 0.15*float(exact_prev.get("deal_score", base_score)) + 0.05*similar_avg, 1)
     elif exact_prev:
-        final_score = round(0.75 * base_score + 0.25 * float(exact_prev.get("deal_score", base_score)), 1)
+        final_score = round(0.75*base_score + 0.25*float(exact_prev.get("deal_score", base_score)), 1)
     elif similar_avg is not None:
-        final_score = round(0.90 * base_score + 0.10 * similar_avg, 1)
+        final_score = round(0.90*base_score + 0.10*similar_avg, 1)
 
     prev_roi = (exact_prev or {}).get("roi_forecast_24m", {}) if exact_prev else None
     if exact_prev and sims and similar_avg is not None:
-        roi24["expected"] = round(
-            0.80 * roi24.get("expected", 0)
-            + 0.15 * float((prev_roi or {}).get("expected", roi24.get("expected", 0)))
-            + 0.05 * (similar_avg or roi24.get("expected", 0)),
-            1,
-        )
+        roi24["expected"] = round(0.80*roi24.get("expected",0) + 0.15*float((prev_roi or {}).get("expected", roi24.get("expected",0))) + 0.05*(similar_avg or roi24.get("expected",0)), 1)
     elif exact_prev:
         try_prev = float((prev_roi or {}).get("expected", roi24.get("expected", 0)))
-        roi24["expected"] = round(0.75 * roi24.get("expected", 0) + 0.25 * try_prev, 1)
+        roi24["expected"] = round(0.75*roi24.get("expected",0) + 0.25*try_prev, 1)
     elif similar_avg is not None:
-        roi24["expected"] = round(0.90 * roi24.get("expected", 0) + 0.10 * (similar_avg or 0), 1)
+        roi24["expected"] = round(0.90*roi24.get("expected",0) + 0.10*(similar_avg or 0), 1)
 
     # ---- Strict rebuilt/salvage handling (cap + ROI penalty + warnings) ----
     warnings_ui = []
-    branded = title_status in {"rebuilt", "salvage", "branded", "flood", "lemon"}
+    branded = title_status in {"rebuilt","salvage","branded","flood","lemon"}
     if branded:
         final_score = min(75.0, final_score - 5.0)
         roi24["expected"] = round(roi24.get("expected", 0) - 5.0, 1)
@@ -727,20 +654,20 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         warnings_ui.append(f"High average insurance cost in {state_code} — include in TCO.")
 
     # ---- Confidence
-    confidence = clip(float(data.get("confidence_level", 0.7)) * 100, 0, 100)
+    confidence = clip(float(data.get("confidence_level", 0.7))*100, 0, 100)
 
     # ---- Components → human text lines (safe-escaped)
     comp_lines = []
     components = data.get("components", []) or []
     ctx_for_exp = {"market_refs": market_refs, "vehicle_facts": facts, "from_ad": data.get("from_ad") or {}}
     for c in components:
-        name = c.get("name", "")
+        name = c.get("name","")
         score = c.get("score", 0)
-        note = c.get("note", "")
+        note = c.get("note","")
         try:
             comp_lines.append(explain_component(name, score, note, ctx=ctx_for_exp))
         except Exception:
-            comp_lines.append(f"{name.capitalize()} — {int(clip(score, 0, 100))}/100")
+            comp_lines.append(f"{name.capitalize()} — {int(clip(score,0,100))}/100")
 
     # ---- Classification
     verdict = classify_deal(final_score)
@@ -753,10 +680,8 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
             data["score_explanation"] = fixed
             raw_exp = fixed
         else:
-            raw_exp = (
-                "Model did not provide a sufficient rationale. "
-                "Please ensure the listing includes year, trim, mileage, price, title, and location, then retry."
-            )
+            raw_exp = ("Model did not provide a sufficient rationale. "
+                       "Please ensure the listing includes year, trim, mileage, price, title, and location, then retry.")
 
     # ---- UI OUTPUT
     st.markdown("### Deal Score")
@@ -769,7 +694,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     with cols[1]:
         try:
             ask = float(data.get("ask_price_usd", 0))
-        except Exception:
+        except:
             ask = 0.0
         st.markdown(f"**Asking price:** ${int(ask):,}")
         if market_refs.get("median_clean"):
@@ -777,15 +702,15 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
             st.markdown(f"**Clean-title median:** ${int(med):,}")
             st.markdown(f"**Market gap:** {gap_pct:+.0f}%")
     with cols[2]:
-        brand = str((data.get("from_ad") or {}).get("brand", "")).upper()
+        brand = str((data.get("from_ad") or {}).get("brand","")).upper()
         yr = (data.get("from_ad") or {}).get("year", "")
-        model_name = (data.get("from_ad") or {}).get("model", "")
+        model_name = (data.get("from_ad") or {}).get("model","")
         st.markdown(f"**Vehicle:** {html.escape((brand or '—'))} {html.escape(str(model_name or ''))} {html.escape(str(yr or ''))}")
         st.markdown(f"**Title:** {html.escape(title_status or 'unknown')}")
         st.markdown(f"**Location:** {html.escape(state_or_zip or '—')}")
 
     # score explanation (model text, escaped)
-    score_exp = html.escape(raw_exp).replace("\\n", "<br/>")
+    score_exp = html.escape(raw_exp).replace("\\n","<br/>")
     if score_exp:
         st.markdown(f"<div class='section card'><b>Why this score?</b><br/>{score_exp}</div>", unsafe_allow_html=True)
 
@@ -803,17 +728,17 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     st.markdown("<div class='section'><small class='muted'>Legacy 24m forecast kept for compatibility</small></div>", unsafe_allow_html=True)
     r2 = st.columns(3)
     with r2[0]:
-        st.metric("Expected (24m)", f"{roi24.get('expected', 0):+.1f}%")
+        st.metric("Expected (24m)", f"{roi24.get('expected',0):+.1f}%")
     with r2[1]:
-        st.metric("Optimistic (24m)", f"{roi24.get('optimistic', 0):+.1f}%")
+        st.metric("Optimistic (24m)", f"{roi24.get('optimistic',0):+.1f}%")
     with r2[2]:
-        st.metric("Pessimistic (24m)", f"{roi24.get('pessimistic', 0):+.1f}%")
+        st.metric("Pessimistic (24m)", f"{roi24.get('pessimistic',0):+.1f}%")
 
     # Risk Tier & Buyer Fit
-    rt = data.get("risk_tier", "").strip() or "Tier 2 (average-risk)"
-    bf = data.get("buyer_fit", "").strip()
-    rr = data.get("relative_rank", "").strip()
-    verif = data.get("verification_summary", "").strip()
+    rt = data.get("risk_tier","").strip() or "Tier 2 (average-risk)"
+    bf = data.get("buyer_fit","").strip()
+    rr = data.get("relative_rank","").strip()
+    verif = data.get("verification_summary","").strip()
 
     st.markdown("<div class='section card'>", unsafe_allow_html=True)
     st.markdown(f"**Risk Tier:** {html.escape(rt)}", unsafe_allow_html=True)
@@ -839,13 +764,13 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         warn_html = "".join([f"<li>{html.escape(w)}</li>" for w in warnings_ui])
         st.markdown(f"<div class='section card'><b>Warnings</b><ul>{warn_html}</ul></div>", unsafe_allow_html=True)
 
-    # web lookup badge (FIXED: avoid nested braces causing unmatched ')')
+    # web lookup badge
     web_done = bool(data.get("web_search_performed", False))
-    status_text = "performed" if web_done else "NOT performed (model fallback)"
-    badge_class = "badge" + (" warn" if not web_done else "")
     st.markdown(
-        f"<div class='section'>Web lookup: <span class='{badge_class}'>{status_text}</span></div>",
-        unsafe_allow_html=True,
+        f"<div class='section'>Web lookup: "
+        f"<span class='badge {'warn' if not web_done else ''}'>"
+        f"{'NOT performed (model fallback)' if not web_done else 'performed'}</span></div>",
+        unsafe_allow_html=True
     )
 
     # ---- Save history
@@ -854,13 +779,13 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         "unique_ad_id": must_id,
         "raw_text": ad,
         "from_ad": {
-            "brand": (data.get("from_ad") or {}).get("brand", ""),
-            "model": (data.get("from_ad") or {}).get("model", ""),
-            "year": (data.get("from_ad") or {}).get("year", ""),
-            "state_or_zip": state_or_zip,
+            "brand": (data.get("from_ad") or {}).get("brand",""),
+            "model": (data.get("from_ad") or {}).get("model",""),
+            "year": (data.get("from_ad") or {}).get("year",""),
+            "state_or_zip": state_or_zip
         },
         "deal_score": final_score,
-        "confidence_level": round(confidence / 100, 3),
+        "confidence_level": round(confidence/100, 3),
         "market_refs": market_refs,
         "roi_forecast_24m": roi24,
         "roi_forecast": roi_triple,
@@ -868,7 +793,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         "relative_rank": rr,
         "buyer_fit": bf,
         "verification_summary": verif,
-        "web_search_performed": web_done,
+        "web_search_performed": web_done
     }
     try:
         # keep same columns in Sheets (do not alter secrets/structure)
