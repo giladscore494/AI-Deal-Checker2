@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 *-
 # ===========================================================
 # 🚗 AI Deal Checker - U.S. Edition (Pro) v10.2.0
 # Full v2.0 Analyst Spec | ROI 12/24/36m | Risk Tier | Buyer Fit | Compliance
