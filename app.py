@@ -429,6 +429,21 @@ Edge-case heuristic layer (20 scenarios — apply in addition to base weights):
 17) Canada-import / grey market → −10 market; −10 resale; mention potential registration/insurance frictions.
 18) Major recall fixed with proof → +5 reliability.
 19) Hybrid/EV traction battery recently replaced → +20 reliability; +10 resale.
+Extended risk and compliance logic (add below the 20 edge cases):
+• Always cross-check safety recalls via NHTSA and active TSBs; if open recalls found, reduce reliability −5 and include note.
+• If VIN indicates manufacturer buyback or lemon law history → cap deal_score ≤ 65 and flag as "Lemon/Buyback risk".
+• If odometer discrepancy or title mileage not actual → cap ≤ 60 and mention "Not actual mileage".
+• If warranty expired (<5yr/60k mi for mainstream, <4yr/50k for luxury) → −10 reliability, −5 resale; explain in reliability rationale.
+• If factory powertrain warranty active → +10 reliability confidence.
+• If Carfax shows “commercial use” (fleet, rental, ride-share) → −10 reliability, −10 resale; warn about heavy wear.
+• If service records show all-dealer maintenance → +10 reliability, +5 resale.
+• If listing location is in flood-prone ZIP (Louisiana, Florida coastal, Texas Gulf) → −8 rust/flood; mention flood risk explicitly.
+• If ad mentions “as-is sale”, “no warranty”, or “mechanic special” → reduce confidence and market valuation significantly (−10 to −20 combined).
+• If luxury performance (AMG/M/Hellcat) and tire/maintenance costs > $2k/year → −10 TCO, note high cost-of-ownership.
+• If EV with degraded or replaced battery (verified via manufacturer) → adjust reliability ±20 depending on replacement status.
+• If EV range <80% of original → cap deal_score ≤ 70 and mention “battery degradation”.
+• Always ensure numeric consistency: explanation text must never contradict any component score.
+• End each explanation with a short ROI summary: expected return (12/24/36m) and key U.S. buyer takeaway.
 20) “As-is” sale with no warranty → −10 confidence; −10 resale; emphasize PPI.
 • If listing text mentions any of these keywords:
   ["new engine", "engine replaced", "factory engine replaced", "rebuilt transmission", "new transmission", "engine under warranty", "factory rebuild", "powertrain warranty", "short block replaced"]
