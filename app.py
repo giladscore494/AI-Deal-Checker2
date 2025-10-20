@@ -30,7 +30,7 @@ st.set_page_config(page_title="AI Deal Checker", page_icon="🚗", layout="cente
 
 # --- AUTO THEME for Android + iOS Safari (No Buttons) ---
 def inject_auto_theme():
-    st.markdown(\"""
+    st.markdown("""
     <style>
     :root { color-scheme: light dark; }
 
