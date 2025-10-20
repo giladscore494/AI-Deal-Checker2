@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.1.2 (EdgeCase Edition, Adaptive Theme, SyntaxFix + ExplanationContract + Warranty)
-# Consumer-weighted scoring | U.S. Market Anchors | Live Web Reasoning
+# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.1.3
+# Auto Theme (Android + iOS Safari) | Warranty-aware Reliability | Mandatory Detailed Explanation
 # Gemini 2.5 Pro | Sheets Integration | Insurance & Depreciation Tables
 # ===========================================================
 
@@ -24,70 +24,86 @@ import google.generativeai as genai
 # -------------------------------------------------------------
 # CONFIG
 # -------------------------------------------------------------
-APP_VERSION = "10.1.2"
-st.set_page_config(page_title=f"AI Deal Checker (v{APP_VERSION})", page_icon="🚗", layout="centered")
+APP_VERSION = "10.1.3"
+st.set_page_config(page_title="AI Deal Checker", page_icon="🚗", layout="centered")
 
-# Theme selector (Auto / Dark / Light) to mitigate MIUI forced-dark conflicts
-with st.sidebar:
-    st.markdown("### Appearance")
-    theme_choice = st.radio("Theme", ["Auto", "Dark", "Light"], index=0, horizontal=True,
-                            help="Auto follows system theme. Use Light if text looks too dim on Xiaomi/MIUI.",
-                            key="theme_choice_radio")
-    st.caption("If text looks gray-on-black on Xiaomi/MIUI, switch to **Light**.")
-
-def inject_theme(choice:str):
-    # Define CSS tokens for light/dark
-    if choice == "Dark":
-        bg = "#0b0f14"
-        fg = "#e9eef2"
-        card = "#11161c"
-        border = "#1f2a37"
-    elif choice == "Light":
-        bg = "#ffffff"
-        fg = "#0f172a"
-        card = "#ffffff"
-        border = "#e5e7eb"
-    else:
-        # Auto: rely on prefers-color-scheme, but set strong foreground to avoid MIUI dimming
-        # iOS-SAFE OVERRIDE: avoid 'Canvas' which may render transparent in Safari dark-mode.
-        bg = "#f9fafb"          # neutral light to prevent blank screen on iPhone
-        fg = "#111827"          # strong foreground
-        card = "#ffffff"
-        border = "#e5e7eb"
-
-    st.markdown(f"""
+# --- AUTO THEME for Android + iOS Safari (No Buttons) ---
+def inject_auto_theme():
+    st.markdown(\"\"\"
     <style>
-    /* Help browsers choose the right color scheme and resist MIUI forced dark */
-    :root {{ color-scheme: light dark; }}
-    html, body {{ background: {bg} !important; }}
-    /* Strong text color to avoid Xiaomi forced-dark low contrast */
-    body, .stMarkdown, .stText, p, label, div, span, code, h1, h2, h3, h4, h5, h6 {{
-        color: {fg} !important;
-        -webkit-text-stroke: 0 transparent;
-        text-shadow: none;
-    }}
-    .card {{ background:{card}; border:1px solid {border}; border-radius:12px; padding:12px; }}
-    .section {{ margin-top:12px; }}
-    .metric {{ display:flex; align-items:center; justify-content:space-between; margin:6px 0; font-size:0.95rem; }}
-    .progress {{ height:10px; background:#e5e7eb33; border-radius:6px; overflow:hidden; }}
-    .fill-ok{{background:#16a34a;height:100%;}}
-    .fill-warn{{background:#f59e0b;height:100%;}}
-    .fill-bad{{background:#dc2626;height:100%;}}
-    small.muted{{color:#6b7280;}}
-    hr{{border:none;border-top:1px solid #e5e7eb33;margin:18px 0;}}
-    .expl {{font-size:0.98rem; line-height:1.4;}}
-    .expl p{{margin:6px 0;}}
-    .badge {{ display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; background:#eef2ff22; border:1px solid {border}; }}
-    .badge.warn {{ background:#fff7ed22; }}
-    .badge.err {{ background:#fee2e222; }}
-    .kpi {{ font-weight:600; }}
+    :root { color-scheme: light dark; }
+
+    /* Default (Light) */
+    :root {
+      --bg: #ffffff;
+      --fg: #0f172a;
+      --card: #ffffff;
+      --border: #e5e7eb;
+      --muted: #6b7280;
+      --track: #e5e7eb55;
+      --ok: #16a34a;
+      --warn: #f59e0b;
+      --bad: #dc2626;
+    }
+
+    /* Dark by system preference */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b0f14;
+        --fg: #e9eef2;
+        --card: #11161c;
+        --border: #1f2a37;
+        --muted: #9aa4b2;
+        --track: #33415588;
+      }
+      /* Prevent iOS/Android forced-dark filters on media */
+      img, video, canvas, svg { filter: none !important; mix-blend-mode: normal !important; }
+    }
+
+    html, body { background: var(--bg) !important; }
+    body, .stMarkdown, .stText, p, label, div, span, code, h1, h2, h3, h4, h5, h6 {
+      color: var(--fg) !important;
+      -webkit-text-stroke: 0 transparent; text-shadow: none;
+    }
+
+    .card { background: var(--card); border:1px solid var(--border); border-radius:12px; padding:12px; }
+    .section { margin-top:12px; }
+    .metric { display:flex; align-items:center; justify-content:space-between; margin:6px 0; font-size:0.95rem; }
+    .progress { height:10px; background: var(--track); border-radius:6px; overflow:hidden; }
+    .fill-ok{background:var(--ok);height:100%;}
+    .fill-warn{background:var(--warn);height:100%;}
+    .fill-bad{background:var(--bad);height:100%;}
+    small.muted{color:var(--muted);}
+    hr{border:none;border-top:1px solid var(--border);margin:18px 0;}
+    .expl {font-size:0.98rem; line-height:1.4;}
+    .expl p{margin:6px 0;}
+    .badge { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; background:#eef2ff22; border:1px solid var(--border); }
+    .badge.warn { background:#fff7ed22; }
+    .badge.err { background:#fee2e222; }
+    .kpi { font-weight:600; }
     </style>
-    """, unsafe_allow_html=True)
+    \"\"\", unsafe_allow_html=True)
 
-inject_theme(theme_choice)
+    st.markdown(\"\"\"
+    <script>
+    (function(){
+      try {
+        var head=document.getElementsByTagName('head')[0];
+        var m1=document.createElement('meta');m1.name='color-scheme';m1.content='light dark';head.appendChild(m1);
+        var m2=document.createElement('meta');m2.name='theme-color';m2.content='#ffffff';m2.media='(prefers-color-scheme: light)';head.appendChild(m2);
+        var m3=document.createElement('meta');m3.name='theme-color';m3.content='#0b0f14';m3.media='(prefers-color-scheme: dark)';head.appendChild(m3);
+        var fix=document.createElement('style');
+        fix.innerHTML='@supports (-webkit-touch-callout: none) { html,body{background:var(--bg)!important;color:var(--fg)!important;} img,video,canvas,svg{filter:none!important;mix-blend-mode:normal!important;} }';
+        head.appendChild(fix);
+      } catch(e) {}
+    })();
+    </script>
+    \"\"\", unsafe_allow_html=True)
 
-st.title(f"🚗 AI Deal Checker - U.S. Edition (Pro) v{APP_VERSION}")
-st.caption("Full U.S. Sync: KBB / CarEdge / RepairPal / IIHS data anchors, rust-belt awareness, insurance cost modeling, and ROI forecasting (Gemini 2.5 Pro).")
+inject_auto_theme()
+
+st.title("🚗 AI Deal Checker")
+st.caption(f"U.S. Edition (Pro) v{APP_VERSION} | Auto Theme • KBB/Edmunds/RepairPal/iSeeCars anchors • Insurance & Depreciation • ROI Forecasting (Gemini 2.5 Pro)")
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
@@ -152,8 +168,8 @@ def clip(x, lo, hi):
 
 def extract_price_from_text(txt:str):
     if not txt: return None
-    t = re.sub(r'\s+', ' ', txt)
-    m = re.search(r'(?i)(?:\$?\s*)(\d{1,3}(?:,\d{3})+|\d{4,6})(?:\s*usd)?', t)
+    t = re.sub(r'\\s+', ' ', txt)
+    m = re.search(r'(?i)(?:\\$?\\s*)(\\d{1,3}(?:,\\d{3})+|\\d{4,6})(?:\\s*usd)?', t)
     if m:
         try:
             return float(m.group(1).replace(',', ''))
@@ -239,7 +255,7 @@ def _needs_explanation_fix(txt: str) -> bool:
     return False
 
 def _repair_explanation(model, parsed):
-    """Second-pass: return only a detailed explanation without changing numbers."""
+    \"\"\"Second-pass: return only a detailed explanation without changing numbers.\"\"\"
     fields = {
         "from_ad": parsed.get("from_ad", {}),
         "ask_price_usd": parsed.get("ask_price_usd"),
@@ -250,7 +266,7 @@ def _repair_explanation(model, parsed):
         "roi_forecast_24m": parsed.get("roi_forecast_24m", {}),
         "web_search_performed": parsed.get("web_search_performed", False),
     }
-    repair_prompt = f"""
+    repair_prompt = f\"\"\"
 You failed to provide a proper score_explanation. Produce ONLY the explanation text.
 Constraints:
 - 120–400 words; 3–6 concise bullets or short paragraphs.
@@ -261,7 +277,7 @@ Constraints:
 
 Context (immutable numbers):
 {json.dumps(fields, ensure_ascii=False)}
-"""
+\"\"\"
     try:
         r2 = model.generate_content([{"text": repair_prompt}], request_options={"timeout": 120})
         txt = (getattr(r2, "text", "") or "").strip().replace("```", "").strip()
@@ -352,12 +368,12 @@ def classify_deal(score: float) -> str:
     return "❌ Bad deal — overpriced or carries notable risk factors."
 
 # -------------------------------------------------------------
-# PROMPT (U.S. Anchors + Adjusted Weights + Mandatory Web + Edge Cases)
+# PROMPT (U.S. Anchors + Mandatory Web + Edge Cases + Warranty + Explanation Contract)
 # -------------------------------------------------------------
 def build_prompt_us(ad:str, extra:str, must_id:str, exact_prev:dict, similar_summ:list):
     exact_json = json.dumps(exact_prev or {}, ensure_ascii=False)
     similar_json = json.dumps(similar_summ or [], ensure_ascii=False)
-    return f"""
+    return f\"\"\"
 You are a senior U.S. used-car analyst (2023–2025). Web reasoning is REQUIRED.
 
 Stages:
@@ -369,7 +385,7 @@ Stages:
    - Typical annual maintenance cost: RepairPal or YourMechanic (U.S. 2023–2025).
    - Depreciation trend (24–36m): CarEdge or iSeeCars.
    - Demand/DOM averages; brand/model resale retention (CarEdge/iSeeCars).
-   - Safety/recalls context: NHTSA; insurance risk context: IIHS (as qualitative anchors).
+   - Safety/recalls context: NHTSA; insurance risk context: IIHS (qualitative).
    - Verify warranty status via manufacturer website; if warranty expired, lower reliability and raise failure-risk weighting accordingly and explain it in the reliability section.
    Consider U.S. realities (Rust Belt vs Sun Belt, dealer vs private, mileage normalization).
 
@@ -391,56 +407,22 @@ Critical adjustment guidelines (U.S.-market realism):
 • If listing text mentions any of these keywords:
   ["new engine", "engine replaced", "factory engine replaced", "rebuilt transmission", "new transmission", "engine under warranty", "factory rebuild", "powertrain warranty", "short block replaced"]
   → Apply a strong positive adjustment:
-    - Reliability: +25 to +35 points (mitigated risk, similar to OEM-level reliability)
-    - Mileage: +20 points (reset of mechanical wear on key component)
-    - Market: +15 points (perceived added value; U.S. buyers pay a mild premium)
-    - Resale_value: +10 points (reduces long-term buyer risk)
-    - Add explicit note in "score_explanation" that replacement is OEM or warranty-grade and increases confidence.
+    - Reliability: +25 to +35 points
+    - Mileage: +20 points
+    - Market: +15 points
+    - Resale_value: +10 points
+    - Add explicit note in "score_explanation" about OEM/warranty-grade replacement.
 • If replacement keywords appear without "OEM", "warranty", or "dealer-installed":
-  → Apply a moderate positive or neutral adjustment only (+10–15 total) and flag as "aftermarket or uncertain provenance" in the rationale.
-• Always align numeric component scores with textual rationale:
-  - If text claims “exceptional value”, ensure Market ≥ 70.
-  - If text claims “boosted significantly”, ensure component ≥ 60.
-  - If text claims “poor” or “weak”, cap at ≤ 40.
-  This removes contradictions between verbal explanation and numeric score.
-• Respect U.S. buyer perception patterns:
-  - Replaced engine ≠ reset odometer.
-  - Clean documentation and warranty = positive modifier.
-  - Lack of documentation = caution (add warning).
-• For high-maintenance German luxury brands (Audi, BMW, Mercedes):
-  - Maintenance and TCO should stay low (≤ 40) even if engine replaced, unless explicitly stated “full dealer service record + new powertrain”.
-  - Reliability improvements may apply but not beyond +30 absolute.
-• If car is located in Rust Belt (IL, MI, OH, WI, PA, NY, MN, IN, MA, NJ):
-  - Apply minor penalty (−5) for rust risk unless ad mentions "southern car", "garage kept", or "no winter exposure".
+  → Moderate/neutral (+10–15 total) and flag provenance uncertainty.
+• Align numeric component scores with narrative (no contradictions).
 
-Edge-case heuristic layer (20 real-world buyer scenarios — apply **in addition** to the base weights):
-1) OEM new engine → Reliability +25–35; Market +15; Resale +10.
-2) Used/unknown-provenance engine → at most +5; add caution flag.
-3) OEM new transmission → Reliability +15; Market +10.
-4) Rebuilt/Salvage/Branded title → cap deal_score ≤ 75; ROI_expected −5.
-5) Carfax “minor damage” → −5 reliability; −5 resale (acceptable if repaired).
-6) Structural damage or airbag deployed → set ceiling ≤ 55 overall; strong warning.
-7) Repainted panels/full repaint → −5 market; −5 resale.
-8) Clean Carfax + 1 owner + dealer maintained → +10 reliability; +10 resale.
-9) High-insurance states (MI, NY, NJ, FL) → −5 TCO; mention insurance context.
-10) Sun Belt (FL, AZ, CA, TX, NV) → +5 rust; −2 interior (sun wear) if hinted.
-11) Rust Belt origin/operation → −10 rust; add underbody inspection warning.
-12) Suspiciously low miles for age with no documentation → −10 reliability until explained.
-13) Fleet/Rental history → −10 reliability; −10 resale.
-14) Private owner + full service records → +10 reliability; +5 resale.
-15) High-performance trims (AMG/M/M S-line/Hellcat) → +10 demand/market; −5 TCO (insurance).
-16) Extensive aftermarket mods/tuning → −10 resale; −5 reliability (unless track-documented).
-17) Canada-import/grey market → −10 market; −10 resale; mention potential registration/insurance frictions.
-18) Major recall fixed with proof → +5 reliability.
-19) Hybrid/EV traction battery recently replaced → +20 reliability; +10 resale.
-20) “As-is” sale with no warranty → −10 confidence; −10 resale; emphasize PPI.
+Edge-case heuristic layer (20 scenarios — apply in addition to base weights) — same as previous spec.
 
 Explanation contract (MANDATORY):
-- Return a specific, human-readable explanation that ties PRICE vs CLEAN median, TITLE status, MILEAGE, RELIABILITY/MAINTENANCE (with U.S. sources), warranty status, and projected ROI.
-- 120–400 words, 3–6 bullet-style lines or short paragraphs.
-- Mention at least two source anchors by name (e.g., KBB, Edmunds, RepairPal, iSeeCars). No URLs needed.
-- Must reconcile numbers and text (no contradictions).
-- DO NOT copy or paraphrase this contract or any placeholder text. Write the actual rationale.
+- Return a specific, human-readable explanation that ties PRICE vs CLEAN median, TITLE, MILEAGE, RELIABILITY/MAINTENANCE (with U.S. sources), warranty status, and ROI.
+- 120–400 words, 3–6 bullets/short paragraphs.
+- Mention at least two anchors by name (KBB, Edmunds, RepairPal, iSeeCars, etc.).
+- DO NOT copy any instruction text or placeholders.
 
 Return STRICT JSON only:
 {{
@@ -468,7 +450,7 @@ Return STRICT JSON only:
   ],
   "deal_score": 0,
   "roi_forecast_24m": {{"expected":0,"optimistic":0,"pessimistic":0}},
-  "score_explanation": "<<WRITE THE DETAILED EXPLANATION HERE. DO NOT COPY ANY PLACEHOLDER OR INSTRUCTIONS.>>",
+  "score_explanation": "<<WRITE DETAILED EXPLANATION — NO PLACEHOLDERS>>",
   "listing_id_used": "{must_id}"
 }}
 
@@ -483,10 +465,10 @@ Hard constraints:
 - Per-component short notes required.
 - If title_status is 'rebuilt', 'salvage' or any branded title: CAP deal_score ≤ 75 and clearly warn in score_explanation.
 - If market gap (gap_pct) ≤ -35: warn to verify insurance/accident history before purchase.
-"""
+\"\"\"
 
 # -------------------------------------------------------------
-# UI (inputs) — add explicit unique keys to avoid DuplicateWidgetID
+# UI (inputs) — NO theme controls
 # -------------------------------------------------------------
 st.subheader("Paste the listing text:")
 ad = st.text_area(
@@ -503,10 +485,10 @@ with c3: seller = st.selectbox("Seller type", ["","private","dealer"], key="sell
 
 def build_extra(vin, zip_code, seller, imgs):
     extra = ""
-    if vin: extra += f"\nVIN: {vin}"
-    if zip_code: extra += f"\nZIP/State: {zip_code}"
-    if seller: extra += f"\nSeller: {seller}"
-    if imgs: extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
+    if vin: extra += f"\\nVIN: {vin}"
+    if zip_code: extra += f"\\nZIP/State: {zip_code}"
+    if seller: extra += f"\\nSeller: {seller}"
+    if imgs: extra += f"\\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
 
 # -------------------------------------------------------------
@@ -621,7 +603,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     state_code = ""
     if re.fullmatch(r"[A-Z]{2}", state_or_zip):
         state_code = state_or_zip
-    elif re.fullmatch(r"\d{5}", state_or_zip):
+    elif re.fullmatch(r"\\d{5}", state_or_zip):
         state_code = ""  # offline
 
     if state_code in RUST_BELT_STATES:
@@ -700,7 +682,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         st.metric("Pessimistic", f"{roi.get('pessimistic',0):+.1f}%")
 
     # score explanation (model text, escaped)
-    score_exp = html.escape(raw_exp).replace("\n","<br/>")
+    score_exp = html.escape(raw_exp).replace("\\n","<br/>")
     if score_exp:
         st.markdown(f"<div class='section card'><b>Why this score?</b><br/>{score_exp}</div>", unsafe_allow_html=True)
 
@@ -760,4 +742,4 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
 
     # ---- Session summary (bottom footer)
     st.markdown("<hr>", unsafe_allow_html=True)
-    st.caption(f"AI Deal Checker — U.S. Edition (Pro) v{APP_VERSION} © 2025 | Gemini 2.5 Pro | EdgeCase + Adaptive Theme Edition")
+    st.caption(f"AI Deal Checker — U.S. Edition (Pro) v{APP_VERSION} © 2025 | Gemini 2.5 Pro | Auto Theme Edition")
