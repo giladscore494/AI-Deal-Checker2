@@ -5,7 +5,7 @@
 # Gemini 2.5 Pro | Sheets Integration | Insurance & Depreciation Tables
 # ===========================================================
 
-import os, json, re, hashlib, time
+import os, json, re, hashlib, time, html
 from datetime import datetime
 import streamlit as st
 from json_repair import repair_json
@@ -73,6 +73,9 @@ hr{border:none;border-top:1px solid #e5e7eb;margin:18px 0;}
 .expl {font-size:0.98rem; line-height:1.4;}
 .expl p{margin:6px 0;}
 .card {border:1px solid #e5e7eb; border-radius:10px; padding:12px; background:#fff;}
+.badge { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; background:#eef2ff; }
+.badge.warn { background:#fff7ed; }
+.badge.err { background:#fee2e2; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,7 +88,7 @@ SUN_BELT_STATES = {"FL","AZ","TX","NV","CA"}
 DEPRECIATION_TABLE = {
     "MAZDA": -14, "HONDA": -13, "TOYOTA": -12, "BMW": -22, "FORD": -19,
     "CHEVROLET": -18, "TESLA": -9, "KIA": -17, "HYUNDAI": -16, "SUBARU": -14,
-    "NISSAN": -17, "VOLKSWAGEN": -18, "JEEP": -21, "MERCEDES": -23
+    "NISSAN": -17, "VOLKSWAGEN": -18, "JEEP": -21, "MERCEDES": -23, "AUDI": -22
 }
 
 INSURANCE_COST = {"MI": 2800, "FL": 2400, "NY": 2300, "OH": 1100, "TX": 1700, "CA": 1800, "AZ": 1400, "IL": 1500}
@@ -100,7 +103,7 @@ def meter(label, value, suffix=""):
         v = 0
     v = max(0, min(100, v))
     css = 'fill-ok' if v >= 70 else ('fill-warn' if v >= 40 else 'fill-bad')
-    st.markdown(f"<div class='metric'><b>{label}</b><span>{int(v)}{suffix}</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric'><b>{html.escape(str(label))}</b><span>{int(v)}{html.escape(str(suffix))}</span></div>", unsafe_allow_html=True)
     st.markdown(f"<div class='progress'><div class='{css}' style='width:{v}%'></div></div>", unsafe_allow_html=True)
 
 def clip(x, lo, hi):
@@ -175,10 +178,12 @@ def save_history(entry):
             ], value_input_option="USER_ENTERED")
         except Exception as e:
             st.warning(f"Sheets write failed: {e}")
+
 # -------------------------------------------------------------
 # HUMAN EXPLANATION ENGINE (U.S. Edition)
 # -------------------------------------------------------------
 def explain_component(name:str, score:float, note:str="", ctx:dict=None) -> str:
+    ctx = ctx or {}
     s = clip(score, 0, 100)
     n = (note or "").strip()
     name_l = (name or "").lower().strip()
@@ -238,7 +243,6 @@ def explain_component(name:str, score:float, note:str="", ctx:dict=None) -> str:
     else:
         base = f"{name.capitalize()} factor is {level}."
 
-    # brand-aware hint
     brand = str((ctx.get("from_ad") or {}).get("brand","")).upper()
     if brand in {"TOYOTA","HONDA","MAZDA","SUBARU"} and name_l in {"reliability","resale_value"}:
         base += " Japanese-brand advantage recognized."
@@ -352,6 +356,7 @@ def build_extra(vin, zip_code, seller, imgs):
     if seller: extra += f"\nSeller: {seller}"
     if imgs: extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
+
 # -------------------------------------------------------------
 # RUN ANALYSIS
 # -------------------------------------------------------------
@@ -441,144 +446,13 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
 
     prev_roi = (exact_prev or {}).get("roi_forecast_24m", {}) if exact_prev else None
     if exact_prev and sims and similar_avg is not None:
-        roi["expected"] = round(0.80*roi["expected"] + 0.15*float((prev_roi or {}).get("expected", roi["expected"])) + 0.05*(similar_avg or roi["expected"]), 1)
+        roi["expected"] = round(
+            0.80*roi["expected"] + 0.15*float((prev_roi or {}).get("expected", roi["expected"])) + 0.05*(similar_avg or roi["expected"]),
+            1
+        )
     elif exact_prev:
         try_prev = float((prev_roi or {}).get("expected", roi.get("expected", 0)))
         roi["expected"] = round(0.75*roi.get("expected",0) + 0.25*try_prev, 1)
     elif similar_avg is not None:
         roi["expected"] = round(0.90*roi.get("expected",0) + 0.10*(similar_avg or 0), 1)
 
-    # ---- Strict rebuilt/salvage handling (cap + ROI penalty + warnings) ----
-    warnings_ui = []
-    branded = title_status in {"rebuilt","salvage","branded","flood","lemon"}
-    if branded:
-        final_score = min(75.0, final_score - 5.0)
-        warnings_ui.append({
-            "type": "error",
-            "text": ("⚠️ **Rebuilt / Branded Title detected** — Insurance and resale value may be significantly lower. "
-                     "Verify repair quality and insurance history before purchase.")
-        })
-        for k in ["expected","optimistic","pessimistic"]:
-            roi[k] = clip(roi.get(k, 0) - 15.0, -50, 50)
-
-    # ---- Price anomaly warning (very low vs clean median) ----
-    try:
-        if gap_pct <= -35:
-            warnings_ui.append({
-                "type": "warning",
-                "text": ("⚠️ Price significantly below U.S. clean-title market average — "
-                         "recommend verifying insurance/accident history before purchase.")
-            })
-    except Exception:
-        pass
-
-    # ---- U.S. regional modifiers (Rust & Insurance)
-    state_or_zip = (facts.get("state_or_zip") or (zip_code or "")).strip().upper()
-    # Normalize to a 2-letter state if user typed a ZIP? We'll keep as-is; if it's exactly 2 letters, treat as state.
-    state_guess = state_or_zip if len(state_or_zip) == 2 else state_or_zip[-2:]
-
-    # Rust modifier
-    rust_mod = 0
-    if state_guess in RUST_BELT_STATES:
-        rust_mod = -3  # small but meaningful
-    elif state_guess in SUN_BELT_STATES:
-        rust_mod = +1
-    final_score = clip(final_score + rust_mod, 0, 100)
-
-    # Insurance/TCO modifier
-    ins_cost = INSURANCE_COST.get(state_guess, 1600)
-    # Map cost to a 0..100 score (lower cost -> higher score)
-    tco_score = clip(100 - (ins_cost / 30), 0, 100)  # 1100 -> ~63, 2400 -> ~20
-    # Blend small portion into final_score to reflect U.S. insurance reality
-    final_score = clip(0.97*final_score + 0.03*tco_score, 0, 100)
-
-    # ---- U.S. brand depreciation anchoring for ROI
-    brand_up = str((data.get("from_ad") or {}).get("brand","")).upper()
-    roi["expected"] = clip(roi.get("expected", 0) + DEPRECIATION_TABLE.get(brand_up, -16), -50, 50)
-
-    # ---- UI: Primary summary card
-    st.markdown("<hr/>", unsafe_allow_html=True)
-    st.subheader(f"Deal Score: {final_score:.1f}/100")
-    st.write(classify_deal(final_score))
-
-    # Confidence + ROI
-    conf = clip(data.get("confidence_level", 0.75)*100, 0, 100)
-    colA, colB = st.columns(2)
-    with colA:
-        meter("Confidence", conf, "%")
-    with colB:
-        st.markdown("**24-Month U.S. Depreciation Forecast (ROI):**")
-        st.write(f"Expected {roi.get('expected',0):+.1f}%  |  Optimistic {roi.get('optimistic',0):+.1f}%  |  Pessimistic {roi.get('pessimistic',0):+.1f}%")
-
-    # Warnings
-    for w in warnings_ui:
-        if w["type"] == "error":
-            st.error(w["text"])
-        elif w["type"] == "warning":
-            st.warning(w["text"])
-
-    # ---- Components section
-    st.markdown("### Component breakdown")
-    ctx = {
-        "market_refs": market_refs,
-        "vehicle_facts": facts,
-        "from_ad": data.get("from_ad", {})
-    }
-    comp_lines = []
-    for comp in (data.get("components") or []):
-        comp_lines.append(explain_component(comp.get("name",""), comp.get("score",0), comp.get("note",""), ctx))
-    st.markdown("<div class='card expl'>" + "<br/>".join([f"<p>• {st.escape_html(x)}</p>" for x in comp_lines]) + "</div>", unsafe_allow_html=True)
-
-    # ---- Quick facts
-    fa = data.get("from_ad", {}) or {}
-    st.markdown("### Extracted facts (U.S.)")
-    cols = st.columns(3)
-    with cols[0]:
-        st.write(f"**{fa.get('year','?')} {fa.get('brand','?')} {fa.get('model','?')}**")
-        st.write(f"VIN: {fa.get('vin','') or '—'}")
-        st.write(f"Seller: {fa.get('seller_type','') or '—'}")
-    with cols[1]:
-        st.write(f"Title: {facts.get('title_status','unknown')}")
-        st.write(f"Owners: {facts.get('owners','?')}")
-        st.write(f"Accidents: {facts.get('accidents','?')}")
-    with cols[2]:
-        st.write(f"Location: {facts.get('state_or_zip','') or (zip_code or '—')}")
-        st.write(f"Miles: {facts.get('miles','—')}")
-        st.write(f"Ask Price: ${data.get('ask_price_usd',0):,.0f}")
-
-    # ---- Market reference
-    st.markdown("### Market reference (clean-title median)")
-    mr = market_refs or {}
-    st.write(f"Median: ${mr.get('median_clean',0):,.0f}  |  Gap: {mr.get('gap_pct',0)}%")
-
-    # ---- Human summary
-    st.markdown("### Summary (plain English)")
-    st.write(data.get("score_explanation",""))
-
-    # ---- Persist record
-    entry = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "unique_ad_id": must_id,
-        "raw_text": ad,
-        "from_ad": {
-            "brand": fa.get("brand",""),
-            "model": fa.get("model",""),
-            "year": fa.get("year",""),
-            "vin": fa.get("vin",""),
-            "seller_type": fa.get("seller_type",""),
-            "state_or_zip": facts.get("state_or_zip","") or (zip_code or "")
-        },
-        "deal_score": final_score,
-        "roi_forecast_24m": roi,
-        "web_search_performed": bool(data.get("web_search_performed", True)),
-        "confidence_level": data.get("confidence_level", 0.75),
-        "market_refs": market_refs
-    }
-    save_history(entry)
-
-    # ---- Disclaimer
-    st.markdown("<hr/>", unsafe_allow_html=True)
-    st.caption(
-        "Disclaimer: This analysis is for informational purposes only and does not constitute professional advice. "
-        "Always obtain a pre-purchase inspection and verify title/insurance/accident history (e.g., Carfax/AutoCheck) before purchase."
-    )
