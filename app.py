@@ -270,7 +270,7 @@ def _repair_explanation(model, parsed):
         "roi_forecast": parsed.get("roi_forecast", {}),
         "risk_tier": parsed.get("risk_tier", ""),
     }
-    repair_prompt = f"""
+    repair_prompt = f\"\"\"
 You failed to provide a proper score_explanation. Produce ONLY the explanation text.
 Constraints:
 - 120–400 words; 3–6 concise bullets or short paragraphs.
@@ -281,7 +281,7 @@ Constraints:
 
 Context (immutable numbers):
 {json.dumps(fields, ensure_ascii=False)}
-"""
+\"\"\"
     try:
         r2 = model.generate_content([{"text": repair_prompt}], request_options={"timeout": 120})
         txt = (getattr(r2, "text", "") or "").strip().replace("```", "").strip()
