@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.1.2 (EdgeCase Edition, Adaptive Theme, SyntaxFix)
+# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.1.2 (EdgeCase Edition, Adaptive Theme, SyntaxFix + ExplanationContract + Warranty)
 # Consumer-weighted scoring | U.S. Market Anchors | Live Web Reasoning
 # Gemini 2.5 Pro | Sheets Integration | Insurance & Depreciation Tables
 # ===========================================================
@@ -49,8 +49,8 @@ def inject_theme(choice:str):
         border = "#e5e7eb"
     else:
         # Auto: rely on prefers-color-scheme, but set strong foreground to avoid MIUI dimming
-        # iOS-SAFE OVERRIDE: avoid 'Canvas' which renders transparent in Safari dark-mode.
-        bg = "#f9fafb"          # neutral light to prevent white screen on iPhone
+        # iOS-SAFE OVERRIDE: avoid 'Canvas' which may render transparent in Safari dark-mode.
+        bg = "#f9fafb"          # neutral light to prevent blank screen on iPhone
         fg = "#111827"          # strong foreground
         card = "#ffffff"
         border = "#e5e7eb"
@@ -217,10 +217,64 @@ def save_history(entry):
             st.warning(f"Sheets write failed: {e}")
 
 # -------------------------------------------------------------
+# EXPLANATION QUALITY GUARDRAIL
+# -------------------------------------------------------------
+def _needs_explanation_fix(txt: str) -> bool:
+    if not txt:
+        return True
+    t = txt.strip()
+    bad_markers = [
+        "Plain-English rationale summarizing",
+        "Write the explanation here",
+        "DO NOT COPY ANY PLACEHOLDER",
+        "Always avoid narrative/score contradictions"
+    ]
+    if any(m.lower() in t.lower() for m in bad_markers):
+        return True
+    if len(t) < 120:  # too short
+        return True
+    anchors = ["KBB", "Edmunds", "RepairPal", "iSeeCars", "NHTSA", "IIHS", "Autotrader", "Cars.com"]
+    if sum(1 for a in anchors if a.lower() in t.lower()) < 2:
+        return True
+    return False
+
+def _repair_explanation(model, parsed):
+    """Second-pass: return only a detailed explanation without changing numbers."""
+    fields = {
+        "from_ad": parsed.get("from_ad", {}),
+        "ask_price_usd": parsed.get("ask_price_usd"),
+        "vehicle_facts": parsed.get("vehicle_facts", {}),
+        "market_refs": parsed.get("market_refs", {}),
+        "deal_score": parsed.get("deal_score"),
+        "components": parsed.get("components", []),
+        "roi_forecast_24m": parsed.get("roi_forecast_24m", {}),
+        "web_search_performed": parsed.get("web_search_performed", False),
+    }
+    repair_prompt = f"""
+You failed to provide a proper score_explanation. Produce ONLY the explanation text.
+Constraints:
+- 120–400 words; 3–6 concise bullets or short paragraphs.
+- Reference at least two U.S. anchors by name (e.g., KBB, Edmunds, RepairPal, iSeeCars, NHTSA, IIHS).
+- Must align with the provided numbers (deal_score={fields.get('deal_score')}, market median/gap={fields.get('market_refs')}).
+- Verify warranty status via manufacturer website; if warranty expired, lower reliability and raise failure-risk weighting accordingly and explain it in the reliability section.
+- No placeholders, no instructions text, no JSON — just the explanation.
+
+Context (immutable numbers):
+{json.dumps(fields, ensure_ascii=False)}
+"""
+    try:
+        r2 = model.generate_content([{"text": repair_prompt}], request_options={"timeout": 120})
+        txt = (getattr(r2, "text", "") or "").strip().replace("```", "").strip()
+        if _needs_explanation_fix(txt):
+            return None
+        return txt
+    except Exception:
+        return None
+
+# -------------------------------------------------------------
 # HUMAN EXPLANATION ENGINE (U.S. Edition)
 # -------------------------------------------------------------
 def explain_component(name:str, score:float, note:str="", ctx:dict=None) -> str:
-    ctx = ctx or {}
     s = clip(score, 0, 100)
     n = (note or "").strip()
     name_l = (name or "").lower().strip()
@@ -305,7 +359,7 @@ def build_prompt_us(ad:str, extra:str, must_id:str, exact_prev:dict, similar_sum
     similar_json = json.dumps(similar_summ or [], ensure_ascii=False)
     return f"""
 You are a senior U.S. used-car analyst (2023–2025). Web reasoning is REQUIRED.
-**Verify warranty status via manufacturer website; if warranty expired, lower reliability and raise failure-risk weighting accordingly and explain it on the reliability In the detailed explanation of reliability|**
+
 Stages:
 1) Extract listing facts: ask_price_usd, brand, model, year, trim, powertrain, miles, title_status, owners, accidents,
    options_value_usd, state_or_zip, days_on_market (if present).
@@ -316,6 +370,7 @@ Stages:
    - Depreciation trend (24–36m): CarEdge or iSeeCars.
    - Demand/DOM averages; brand/model resale retention (CarEdge/iSeeCars).
    - Safety/recalls context: NHTSA; insurance risk context: IIHS (as qualitative anchors).
+   - Verify warranty status via manufacturer website; if warranty expired, lower reliability and raise failure-risk weighting accordingly and explain it in the reliability section.
    Consider U.S. realities (Rust Belt vs Sun Belt, dealer vs private, mileage normalization).
 
 Use prior only for stabilization (do NOT overfit):
@@ -380,6 +435,13 @@ Edge-case heuristic layer (20 real-world buyer scenarios — apply **in addition
 19) Hybrid/EV traction battery recently replaced → +20 reliability; +10 resale.
 20) “As-is” sale with no warranty → −10 confidence; −10 resale; emphasize PPI.
 
+Explanation contract (MANDATORY):
+- Return a specific, human-readable explanation that ties PRICE vs CLEAN median, TITLE status, MILEAGE, RELIABILITY/MAINTENANCE (with U.S. sources), warranty status, and projected ROI.
+- 120–400 words, 3–6 bullet-style lines or short paragraphs.
+- Mention at least two source anchors by name (e.g., KBB, Edmunds, RepairPal, iSeeCars). No URLs needed.
+- Must reconcile numbers and text (no contradictions).
+- DO NOT copy or paraphrase this contract or any placeholder text. Write the actual rationale.
+
 Return STRICT JSON only:
 {{
   "from_ad": {{"brand":"","model":"","year":null,"vin":"","seller_type":""}},
@@ -406,7 +468,7 @@ Return STRICT JSON only:
   ],
   "deal_score": 0,
   "roi_forecast_24m": {{"expected":0,"optimistic":0,"pessimistic":0}},
-  "score_explanation": "Plain-English rationale summarizing the score and ROI with U.S. sources (brief). If narrative states 'exceptional value', Market must be ≥ 70. If narrative says 'boosted significantly', relevant component must be ≥ 60. If narrative says 'poor/weak', cap that component at ≤ 40. Always avoid narrative/score contradictions.",
+  "score_explanation": "<<WRITE THE DETAILED EXPLANATION HERE. DO NOT COPY ANY PLACEHOLDER OR INSTRUCTIONS.>>",
   "listing_id_used": "{must_id}"
 }}
 
@@ -591,6 +653,17 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     # ---- Classification
     verdict = classify_deal(final_score)
 
+    # ---- Explanation quality check + repair if needed
+    raw_exp = data.get("score_explanation", "") or ""
+    if _needs_explanation_fix(raw_exp):
+        fixed = _repair_explanation(model, data)
+        if fixed:
+            data["score_explanation"] = fixed
+            raw_exp = fixed
+        else:
+            raw_exp = ("Model did not provide a sufficient rationale. "
+                       "Please ensure the listing includes year, trim, mileage, price, title, and location, then retry.")
+
     # ---- UI OUTPUT
     st.markdown("### Deal Score")
     meter("Deal Score", final_score, "/100")
@@ -627,7 +700,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         st.metric("Pessimistic", f"{roi.get('pessimistic',0):+.1f}%")
 
     # score explanation (model text, escaped)
-    score_exp = html.escape(data.get("score_explanation","")).replace("\n","<br/>")
+    score_exp = html.escape(raw_exp).replace("\n","<br/>")
     if score_exp:
         st.markdown(f"<div class='section card'><b>Why this score?</b><br/>{score_exp}</div>", unsafe_allow_html=True)
 
