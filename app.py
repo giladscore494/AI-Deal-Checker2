@@ -96,10 +96,11 @@ def clip(x, lo, hi):
         x = 0.0
     return max(lo, min(hi, x))
 
+# ✅ Fixed regex (no double escaping)
 def extract_price_from_text(txt:str):
     if not txt: return None
     t = re.sub(r'\s+', ' ', txt)
-    m = re.search(r'(?i)(?:\\$?\\s*)(\\d{1,3}(?:,\\d{3})+|\\d{4,6})(?:\\s*usd)?', t)
+    m = re.search(r'(?i)(?:\$?\s*)(\d{1,3}(?:,\d{3})+|\d{4,6})(?:\s*usd)?', t)
     if m:
         try:
             return float(m.group(1).replace(',', ''))
@@ -124,11 +125,12 @@ def token_set(text):
     return set([w for w in t.split() if len(w) > 2])
 
 def similarity_score(ad_a, ad_b):
+    # Simple hybrid: token Jaccard + price proximity + location proximity
     ta, tb = token_set(ad_a.get("raw_text")), token_set(ad_b.get("raw_text"))
     j = len(ta & tb) / max(1, len(ta | tb))
     p_a, p_b = float(ad_a.get("price_guess") or 0), float(ad_b.get("price_guess") or 0)
     price_sim = 1.0 - min(1.0, abs(p_a - p_b) / max(1000.0, max(p_a, p_b, 1.0)))
-    loc_sim = 1.0 if (ad_a.get("zip_or_state") == ad_b.get("zip_or_state")) else 0.7
+    loc_sim = 1.0 if (ad_a.get("zip_or_state")==ad_b.get("zip_or_state")) else 0.7
     return 0.6*j + 0.3*price_sim + 0.1*loc_sim
 
 def load_history():
@@ -140,6 +142,7 @@ def load_history():
             return []
     return []
 
+# ✅ Updated save_history – adds Unique Ad ID column at the end
 def save_history(entry):
     data = load_history(); data.append(entry)
     if len(data) > MEMORY_LIMIT: data = data[-MEMORY_LIMIT:]
@@ -151,11 +154,13 @@ def save_history(entry):
             fa = entry.get("from_ad", {}) or {}
             roi = entry.get("roi_forecast_24m", {}) or {}
             gaps = entry.get("market_refs", {}) or {}
+            uid = entry.get("unique_ad_id", "")
             sheet.append_row([
                 ts, fa.get("brand",""), fa.get("model",""), fa.get("year",""),
                 entry.get("deal_score",""), roi.get("expected",""),
                 entry.get("web_search_performed",""), entry.get("confidence_level",""),
-                entry.get("unique_ad_id",""), gaps.get("median_clean",""), gaps.get("gap_pct","")
+                gaps.get("median_clean",""), gaps.get("gap_pct",""),
+                uid  # new column (at the end)
             ], value_input_option="USER_ENTERED")
         except Exception as e:
             st.warning(f"Sheets write failed: {e}")
@@ -187,7 +192,6 @@ def explain_component(name:str, score:float, note:str="", ctx:dict=None) -> str:
     else: level = "poor"
 
     if name_l == "market":
-        # If we have gap_pct in context, we can reference it
         gap = None
         try:
             gap = float((ctx.get("market_refs") or {}).get("gap_pct"))
@@ -233,7 +237,6 @@ def explain_component(name:str, score:float, note:str="", ctx:dict=None) -> str:
     else:
         base = f"{name.capitalize()} factor is {level}."
 
-    # Attach short note from the model (if provided)
     if n:
         return f"{name.capitalize()} — {int(s)}/100 → {base} ({n})"
     return f"{name.capitalize()} — {int(s)}/100 → {base}"
@@ -280,7 +283,7 @@ Return STRICT JSON only:
     "title_status":"unknown","accidents":0,"owners":1,"dealer_reputation":null,
     "rarity_index":0,"options_value_usd":0,"days_on_market":0,"state_or_zip":"","miles":null
   }},
-  "market_refs": {{"median_clean":0,"gap_pct":0}},   // negative gap_pct means priced below clean-title market
+  "market_refs": {{"median_clean":0,"gap_pct":0}},
   "web_search_performed": true,
   "confidence_level": 0.75,
   "components": [
@@ -430,7 +433,6 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     warnings_ui = []
     branded = title_status in {"rebuilt","salvage","branded","flood","lemon"}
     if branded:
-        # Cap at 75, plus nudge -5 to avoid ceiling inflation
         final_score = min(75.0, final_score - 5.0)
         warnings_ui.append({
             "type": "error",
@@ -438,7 +440,6 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
                      "This vehicle has a branded title. Insurance and resale value may be significantly lower. "
                      "Verify repair quality and insurance history before purchase.")
         })
-        # Harsher ROI: -15 points across scenarios, clamped
         for k in ["expected","optimistic","pessimistic"]:
             roi[k] = clip(roi.get(k, 0) - 15.0, -50, 50)
 
