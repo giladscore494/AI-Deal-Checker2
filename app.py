@@ -49,9 +49,10 @@ def inject_theme(choice:str):
         border = "#e5e7eb"
     else:
         # Auto: rely on prefers-color-scheme, but set strong foreground to avoid MIUI dimming
-        bg = "Canvas"           # lets browser choose
-        fg = "CanvasText"       # high-contrast system color
-        card = "Field"
+        # iOS-SAFE OVERRIDE: avoid 'Canvas' which renders transparent in Safari dark-mode.
+        bg = "#f9fafb"          # neutral light to prevent white screen on iPhone
+        fg = "#111827"          # strong foreground
+        card = "#ffffff"
         border = "#e5e7eb"
 
     st.markdown(f"""
