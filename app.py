@@ -563,7 +563,7 @@ Hard constraints:
 - If market gap (gap_pct) ≤ -35: warn to verify insurance/accident history before purchase.
 - Enforce alignment between narrative and component scores (no contradictions).
 """
-    )
+
 
 # -------------------------------------------------------------
 # UI (inputs) — NO theme controls
