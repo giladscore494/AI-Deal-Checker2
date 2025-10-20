@@ -351,10 +351,10 @@ with c3: seller = st.selectbox("Seller type", ["","private","dealer"])
 
 def build_extra(vin, zip_code, seller, imgs):
     extra = ""
-    if vin: extra += f"\nVIN: {vin}"
-    if zip_code: extra += f"\nZIP/State: {zip_code}"
-    if seller: extra += f"\nSeller: {seller}"
-    if imgs: extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
+    if vin: extra += f"\\nVIN: {vin}"
+    if zip_code: extra += f"\\nZIP/State: {zip_code}"
+    if seller: extra += f"\\nSeller: {seller}"
+    if imgs: extra += f"\\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
 
 # -------------------------------------------------------------
@@ -456,3 +456,145 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     elif similar_avg is not None:
         roi["expected"] = round(0.90*roi.get("expected",0) + 0.10*(similar_avg or 0), 1)
 
+    # ---- Strict rebuilt/salvage handling (cap + ROI penalty + warnings) ----
+    warnings_ui = []
+    branded = title_status in {"rebuilt","salvage","branded","flood","lemon"}
+    if branded:
+        final_score = min(75.0, final_score - 5.0)
+        roi["expected"] = round(roi.get("expected", 0) - 5.0, 1)
+        warnings_ui.append("Branded/salvage title detected — insurers and lenders may limit options; resale harder.")
+
+    # ---- Rust belt / insurance context adjustments (light-touch) ----
+    state_or_zip = (facts.get("state_or_zip") or "").strip().upper()
+    state_code = ""
+    if re.fullmatch(r"[A-Z]{2}", state_or_zip):
+        state_code = state_or_zip
+    elif re.fullmatch(r"\d{5}", state_or_zip):
+        state_code = ""  # ZIP to state mapping not available offline
+
+    if state_code in RUST_BELT_STATES:
+        final_score = round(final_score - 1.5, 1)
+        warnings_ui.append("Rust Belt region — inspect underbody/brakes/lines for corrosion.")
+    if state_code in INSURANCE_COST and INSURANCE_COST[state_code] >= 2000:
+        warnings_ui.append(f"High average insurance cost in {state_code} — include in TCO.")
+
+    # ---- Confidence
+    confidence = clip(float(data.get("confidence_level", 0.7))*100, 0, 100)
+
+    # ---- Components → human text lines (safe-escaped)
+    comp_lines = []
+    components = data.get("components", []) or []
+    ctx_for_exp = {
+        "market_refs": market_refs,
+        "vehicle_facts": facts,
+        "from_ad": data.get("from_ad") or {}
+    }
+    for c in components:
+        name = c.get("name","")
+        score = c.get("score", 0)
+        note = c.get("note","")
+        try:
+            comp_lines.append(explain_component(name, score, note, ctx=ctx_for_exp))
+        except Exception as e:
+            comp_lines.append(f"{name.capitalize()} — {int(clip(score,0,100))}/100")
+
+    # ---- Classification
+    verdict = classify_deal(final_score)
+
+    # ---- UI OUTPUT
+    st.markdown("### Deal Score")
+    meter("Deal Score", final_score, "/100")
+    st.markdown(f"<div><span class='badge'>{html.escape(verdict)}</span></div>", unsafe_allow_html=True)
+
+    cols = st.columns(3)
+    with cols[0]:
+        meter("Confidence", confidence, "%")
+    with cols[1]:
+        try:
+            ask = float(data.get("ask_price_usd", 0))
+        except:
+            ask = 0.0
+        st.markdown(f"**Asking price:** ${int(ask):,}")
+        if market_refs.get("median_clean"):
+            med = float(market_refs["median_clean"])
+            st.markdown(f"**Clean-title median:** ${int(med):,}")
+            st.markdown(f"**Market gap:** {gap_pct:+.0f}%")
+    with cols[2]:
+        brand = str((data.get("from_ad") or {}).get("brand","")).upper()
+        yr = (data.get("from_ad") or {}).get("year", "")
+        model_name = (data.get("from_ad") or {}).get("model","")
+        st.markdown(f"**Vehicle:** {html.escape((brand or '—'))} {html.escape(str(model_name or ''))} {html.escape(str(yr or ''))}")
+        st.markdown(f"**Title:** {html.escape(title_status or 'unknown')}")
+        st.markdown(f"**Location:** {html.escape(state_or_zip or '—')}")
+
+    st.markdown("### 24-Month ROI Forecast")
+    roi_cols = st.columns(3)
+    with roi_cols[0]:
+        st.metric("Expected", f"{roi.get('expected',0):+.1f}%")
+    with roi_cols[1]:
+        st.metric("Optimistic", f"{roi.get('optimistic',0):+.1f}%")
+    with roi_cols[2]:
+        st.metric("Pessimistic", f"{roi.get('pessimistic',0):+.1f}%")
+
+    # score explanation (model text, escaped)
+    score_exp = html.escape(data.get("score_explanation","")).replace("\n","<br/>")
+    if score_exp:
+        st.markdown(f"<div class='section card'><b>Why this score?</b><br/>{score_exp}</div>", unsafe_allow_html=True)
+
+    # component breakdown (safe)
+    if comp_lines:
+        st.markdown("<div class='section'><b>Component breakdown</b></div>", unsafe_allow_html=True)
+        safe_lines = [f"<p>• {html.escape(str(x))}</p>" for x in comp_lines]
+        st.markdown("<div class='card expl'>" + "<br/>".join(safe_lines) + "</div>", unsafe_allow_html=True)
+    else:
+        st.info("No component breakdown available.")
+
+    # warnings block
+    if warnings_ui:
+        warn_html = "".join([f"<li>{html.escape(w)}</li>" for w in warnings_ui])
+        st.markdown(f"<div class='section card'><b>Warnings</b><ul>{warn_html}</ul></div>", unsafe_allow_html=True)
+
+    # web lookup badge
+    web_done = bool(data.get("web_search_performed", False))
+    st.markdown(
+        f"<div class='section'>Web lookup: "
+        f"<span class='badge {'warn' if not web_done else ''}'>"
+        f"{'NOT performed (model fallback)' if not web_done else 'performed'}</span></div>",
+        unsafe_allow_html=True
+    )
+
+    # ---- Save history
+    out_entry = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "unique_ad_id": must_id,
+        "raw_text": ad,
+        "from_ad": {
+            "brand": (data.get("from_ad") or {}).get("brand",""),
+            "model": (data.get("from_ad") or {}).get("model",""),
+            "year": (data.get("from_ad") or {}).get("year",""),
+            "state_or_zip": state_or_zip
+        },
+        "deal_score": final_score,
+        "confidence_level": round(confidence/100, 3),
+        "market_refs": market_refs,
+        "roi_forecast_24m": roi,
+        "web_search_performed": web_done
+    }
+    try:
+        save_history(out_entry)
+    except Exception as e:
+        st.warning(f"Local save failed: {e}")
+
+    # ---- Debug panel (collapsible)
+    with st.expander("Debug JSON (model output)"):
+        st.code(json.dumps(data, ensure_ascii=False, indent=2))
+
+    with st.expander("Similar previous (anchors ≤10%)"):
+        if sims:
+            st.json(sims)
+        else:
+            st.write("None")
+
+    # ---- Session summary (bottom footer)
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.caption(f"AI Deal Checker — U.S. Edition (Pro) v{APP_VERSION} © 2025 | Gemini 2.5 Pro | Deterministic Mode | All rights reserved.")
