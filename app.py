@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.1.1 (EdgeCase Edition, Adaptive Theme) — Widget Key Patch
+# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.1.2 (EdgeCase Edition, Adaptive Theme, SyntaxFix)
 # Consumer-weighted scoring | U.S. Market Anchors | Live Web Reasoning
 # Gemini 2.5 Pro | Sheets Integration | Insurance & Depreciation Tables
 # ===========================================================
@@ -24,7 +24,7 @@ import google.generativeai as genai
 # -------------------------------------------------------------
 # CONFIG
 # -------------------------------------------------------------
-APP_VERSION = "10.1.1"
+APP_VERSION = "10.1.2"
 st.set_page_config(page_title=f"AI Deal Checker (v{APP_VERSION})", page_icon="🚗", layout="centered")
 
 # Theme selector (Auto / Dark / Light) to mitigate MIUI forced-dark conflicts
@@ -56,8 +56,10 @@ def inject_theme(choice:str):
 
     st.markdown(f"""
     <style>
+    /* Help browsers choose the right color scheme and resist MIUI forced dark */
     :root {{ color-scheme: light dark; }}
     html, body {{ background: {bg} !important; }}
+    /* Strong text color to avoid Xiaomi forced-dark low contrast */
     body, .stMarkdown, .stText, p, label, div, span, code, h1, h2, h3, h4, h5, h6 {{
         color: {fg} !important;
         -webkit-text-stroke: 0 transparent;
@@ -438,10 +440,10 @@ with c3: seller = st.selectbox("Seller type", ["","private","dealer"], key="sell
 
 def build_extra(vin, zip_code, seller, imgs):
     extra = ""
-    if vin: extra += f"\\nVIN: {vin}"
-    if zip_code: extra += f"\\nZIP/State: {zip_code}"
-    if seller: extra += f"\\nSeller: {seller}"
-    if imgs: extra += f"\\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
+    if vin: extra += f"\nVIN: {vin}"
+    if zip_code: extra += f"\nZIP/State: {zip_code}"
+    if seller: extra += f"\nSeller: {seller}"
+    if imgs: extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
 
 # -------------------------------------------------------------
@@ -556,7 +558,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
     state_code = ""
     if re.fullmatch(r"[A-Z]{2}", state_or_zip):
         state_code = state_or_zip
-    elif re.fullmatch(r"\\d{5}", state_or_zip):
+    elif re.fullmatch(r"\d{5}", state_or_zip):
         state_code = ""  # offline
 
     if state_code in RUST_BELT_STATES:
@@ -624,7 +626,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         st.metric("Pessimistic", f"{roi.get('pessimistic',0):+.1f}%")
 
     # score explanation (model text, escaped)
-    score_exp = html.escape(data.get("score_explanation","")).replace("\\n","<br/>")
+    score_exp = html.escape(data.get("score_explanation","")).replace("\n","<br/>")
     if score_exp:
         st.markdown(f"<div class='section card'><b>Why this score?</b><br/>{score_exp}</div>", unsafe_allow_html=True)
 
@@ -641,12 +643,12 @@ if st.button("Analyze Deal", use_container_width=True, type="primary", key="anal
         warn_html = "".join([f"<li>{html.escape(w)}</li>" for w in warnings_ui])
         st.markdown(f"<div class='section card'><b>Warnings</b><ul>{warn_html}</ul></div>", unsafe_allow_html=True)
 
-    # web lookup badge
+    # web lookup badge — fixed syntax (no illegal backslashes)
     web_done = bool(data.get("web_search_performed", False))
     st.markdown(
         f"<div class='section'>Web lookup: "
         f"<span class='badge {'warn' if not web_done else ''}'>"
-        f\"{'NOT performed (model fallback)' if not web_done else 'performed'}\"</span></div>",
+        f"{'NOT performed (model fallback)' if not web_done else 'performed'}</span></div>",
         unsafe_allow_html=True
     )
 
