@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.8 (Full Engine)
-# Consumer-weighted scoring + strict rebuilt handling + memory + Sheets + full disclaimer
-# Gemini 2.5 Pro | Mandatory Live Web Reasoning | On-screen human-readable explanations
+# 🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.9 (Human Explanation Engine)
+# Consumer-weighted scoring + strict rebuilt handling + memory + Sheets + full disclaimers
+# Gemini 2.5 Pro | Mandatory Live Web Reasoning | Human-readable explanations (no debug)
 # ===========================================================
 
 import os, json, re, hashlib, time
@@ -24,10 +24,10 @@ import google.generativeai as genai
 # -------------------------------------------------------------
 # CONFIG
 # -------------------------------------------------------------
-APP_VERSION = "9.9.8"
+APP_VERSION = "9.9.9"
 st.set_page_config(page_title=f"AI Deal Checker (v{APP_VERSION})", page_icon="🚗", layout="centered")
 st.title(f"🚗 AI Deal Checker - U.S. Edition (Pro) v{APP_VERSION}")
-st.caption("Consumer-weighted scoring with strict rebuilt/salvage handling, memory stabilization and full disclaimer (Gemini 2.5 Pro).")
+st.caption("Consumer-weighted scoring with strict rebuilt/salvage handling, human explanations, memory stabilization and full disclaimer (Gemini 2.5 Pro).")
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID", "")
@@ -57,7 +57,7 @@ if SHEET_ID and SERVICE_JSON and gspread and Credentials:
         st.warning(f"⚠️ Sheets connection failed: {e}")
 
 # -------------------------------------------------------------
-# STYLE (clean UI)
+# STYLE (clean report UI, no debug blocks)
 # -------------------------------------------------------------
 st.markdown("""
 <style>
@@ -70,6 +70,9 @@ st.markdown("""
 small.muted{color:var(--muted);}
 .section {margin-top:12px;}
 hr{border:none;border-top:1px solid #e5e7eb;margin:18px 0;}
+.expl {font-size:0.98rem; line-height:1.4;}
+.expl p{margin:6px 0;}
+.card {border:1px solid #e5e7eb; border-radius:10px; padding:12px; background:#fff;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -164,6 +167,77 @@ def classify_deal(score: float) -> str:
         return "⚖️ Fair deal — acceptable, but verify title and history before proceeding."
     return "❌ Bad deal — overpriced or carries significant risk factors."
 
+# -------- Human Explanation Engine ------------------------------------------
+def explain_component(name:str, score:float, note:str="", ctx:dict=None) -> str:
+    """
+    Returns a full descriptive, plain-English line per factor,
+    using the numeric score (0-100) and optional short note from the model.
+    """
+    s = clip(score, 0, 100)
+    base = ""
+    n = (note or "").strip()
+    name_l = name.lower().strip()
+    # Helper phrase by score bucket
+    if s >= 90: level = "excellent"
+    elif s >= 80: level = "very good"
+    elif s >= 70: level = "good"
+    elif s >= 60: level = "adequate"
+    elif s >= 50: level = "below average"
+    elif s >= 40: level = "weak"
+    else: level = "poor"
+
+    if name_l == "market":
+        # If we have gap_pct in context, we can reference it
+        gap = None
+        try:
+            gap = float((ctx.get("market_refs") or {}).get("gap_pct"))
+        except Exception:
+            pass
+        if gap is not None:
+            if gap <= -20:
+                base = f"Asking price appears well below clean-title market (≈{abs(int(gap))}% under median); {level} value."
+            elif gap <= -10:
+                base = f"Asking price is moderately below market (≈{abs(int(gap))}% under median); {level} value."
+            elif gap < 5:
+                base = f"Asking price aligns with market median; {level} value."
+            else:
+                base = f"Asking price is above market (≈{int(gap)}% over median); {level} value."
+        else:
+            base = f"Price vs market comps is {level}."
+    elif name_l == "title":
+        ts = str(((ctx.get("vehicle_facts") or {}).get("title_status","unknown"))).lower()
+        if ts in {"rebuilt","salvage","branded","flood","lemon"}:
+            base = "Rebuilt/branded title detected — resale and insurability are limited; additional due diligence required."
+        elif ts == "clean":
+            base = "Clean title — typical insurability and resale expectations."
+        else:
+            base = "Title status not confirmed; verify with DMV records."
+    elif name_l == "mileage":
+        base = f"Mileage condition is {level}; lower mileage typically supports stronger resale."
+    elif name_l == "reliability":
+        base = f"Long-term dependability is {level}; owner-reported issues appear consistent with segment norms."
+    elif name_l == "maintenance":
+        base = f"Estimated annual maintenance burden is {level}; plan for routine services and common wear items."
+    elif name_l == "tco":
+        base = f"Total cost of ownership (fuel/insurance/repairs) is {level} relative to peers."
+    elif name_l == "accidents":
+        base = f"Accident history risk is {level}; ensure all repairs were documented and properly performed."
+    elif name_l == "owners":
+        base = f"Ownership history is {level}; fewer owners generally indicate steadier upkeep."
+    elif name_l == "rust":
+        base = f"Regional rust/flood exposure risk is {level}; inspect underside, brake lines, and subframe corrosion."
+    elif name_l == "demand":
+        base = f"Buyer demand and days-on-market profile are {level}; may influence resale timing."
+    elif name_l == "resale_value":
+        base = f"Projected resale retention is {level} for this model/year in the current market."
+    else:
+        base = f"{name.capitalize()} factor is {level}."
+
+    # Attach short note from the model (if provided)
+    if n:
+        return f"{name.capitalize()} — {int(s)}/100 → {base} ({n})"
+    return f"{name.capitalize()} — {int(s)}/100 → {base}"
+
 # -------------------------------------------------------------
 # PROMPT (Web Reasoning + Consumer Weights + Rebuilt Cap + Price Warning)
 # -------------------------------------------------------------
@@ -236,7 +310,7 @@ Extra:
 Hard constraints:
 - Always perform web lookups and set web_search_performed=true; if not possible, list which sources failed but still estimate.
 - Numeric fields must be numbers. deal_score: 0..100. ROI parts: -50..50.
-- Add a short, plain-English note per component explaining the score source.
+- Add a short, plain-English note per component explaining the score.
 - If title_status is 'rebuilt', 'salvage' or any branded title: CAP deal_score ≤ 75 and include a clear warning in score_explanation.
 - If market gap (gap_pct) ≤ -35: add a note recommending to verify insurance/accident history before purchase.
 """
@@ -310,12 +384,10 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
 
     with st.spinner("Analyzing with Gemini 2.5 Pro (mandatory live web reasoning)…"):
         data = None
-        raw_text = None
         for attempt in range(2):
             try:
                 r = model.generate_content(parts, request_options={"timeout": 180})
-                raw_text = getattr(r, "text", None)
-                data = parse_json_safe(raw_text)
+                data = parse_json_safe(getattr(r, "text", None))
                 break
             except Exception as e:
                 if attempt == 0:
@@ -340,15 +412,10 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     final_score = base_score
     if exact_prev and sims and similar_avg is not None:
         final_score = round(0.80*base_score + 0.15*float(exact_prev.get("deal_score", base_score)) + 0.05*similar_avg, 1)
-        memory_note = f"Applied memory: 15% exact ({exact_prev.get('unique_ad_id')}), 5% similar (n={len(sims)})."
     elif exact_prev:
         final_score = round(0.75*base_score + 0.25*float(exact_prev.get("deal_score", base_score)), 1)
-        memory_note = f"Applied memory: 25% exact ({exact_prev.get('unique_ad_id')})."
     elif similar_avg is not None:
         final_score = round(0.90*base_score + 0.10*similar_avg, 1)
-        memory_note = f"Applied memory: 10% similar (n={len(sims)})."
-    else:
-        memory_note = "No memory applied."
 
     prev_roi = (exact_prev or {}).get("roi_forecast_24m", {}) if exact_prev else None
     if exact_prev and sims and similar_avg is not None:
@@ -386,7 +453,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     except Exception:
         pass
 
-    # ---- Persist record ----
+    # ---- Persist record (no debug fields exposed) ----
     record = {
         "unique_ad_id": must_id,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -402,20 +469,15 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         "deal_score_base": base_score,
         "roi_forecast_24m": roi,
         "score_explanation": data.get("score_explanation", ""),
-        "memory_note": memory_note,
-        "similar_used": sims[:3] if sims else [],
         "market_refs": market_refs
     }
     save_history(record)
 
     # ---------------------------------------------------------
-    # RENDER
+    # RENDER (no debug, professional report)
     # ---------------------------------------------------------
     color = "#16a34a" if final_score>=80 else ("#f59e0b" if final_score>=60 else "#dc2626")
     st.markdown(f"<h2 style='text-align:center;color:{color}'>Deal Score: {final_score}/100</h2>", unsafe_allow_html=True)
-    st.write(f"**Base (pre-memory):** {record['deal_score_base']}  |  **Memory:** {record['memory_note']}")
-
-    # Classification
     st.info(classify_deal(final_score))
 
     # Disclaimer (primary block, always shown under score)
@@ -439,31 +501,36 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         st.success("🌐 Live web search performed (model).")
     else:
         st.warning("⚠️ Model could not confirm live web lookup; estimates may be less reliable.")
-    meter("Confidence", float(record.get("confidence_level",0))*100, "%")
+    try:
+        meter("Confidence", float(record.get("confidence_level",0))*100, "%")
+    except Exception:
+        pass
 
     # ROI
     st.subheader("ROI Forecast (24 months)")
     st.write(f"Expected {roi.get('expected',0)}% | Optimistic {roi.get('optimistic',0)}% | Pessimistic {roi.get('pessimistic',0)}%")
 
-    # Summary
+    # Plain-English summary from model (if any)
     if record.get("score_explanation"):
         st.subheader("Summary (plain English)")
         st.write(record["score_explanation"])
 
-    # Components — human-readable (no raw debug)
+    # Components — human-readable (Human Explanation Engine)
     comps = record.get("components") or []
     if comps:
         st.subheader("Component breakdown")
-        for c in comps:
-            try:
-                nm = str(c.get("name","")).strip()
-                sc = clip(c.get("score",0), 0, 100)
-                note = str(c.get("note","")).strip()
-                st.write(f"• **{nm.capitalize()}** — {int(sc)}/100 → {note or 'No note provided.'}")
-            except Exception:
-                continue
+        with st.container():
+            for c in comps:
+                try:
+                    nm = str(c.get("name","")).strip()
+                    sc = clip(c.get("score",0), 0, 100)
+                    note = str(c.get("note","")).strip()
+                    line = explain_component(nm, sc, note, ctx=record)
+                    st.markdown(f"<div class='expl'><p>• {line}</p></div>", unsafe_allow_html=True)
+                except Exception:
+                    continue
 
-    # Market refs
+    # Market refs (clean median + gap)
     if market_refs and (market_refs.get("median_clean") or market_refs.get("gap_pct") is not None):
         try:
             med_clean = int(market_refs.get('median_clean',0))
@@ -471,12 +538,6 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
             med_clean = market_refs.get('median_clean',0)
         gap_str = market_refs.get('gap_pct',0)
         st.caption(f"Market reference (clean-title median): ${med_clean} | Gap: {gap_str}%")
-
-    # Similar anchors
-    if record.get("similar_used"):
-        st.subheader("Similar listings used (anchors)")
-        for s in record["similar_used"]:
-            st.write(f"- ID {s['id']} | prior score {s['score']} | sim={s['sim']} | when={s['when']}")
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.caption("⚠️ Disclaimer: This report is not professional advice. Always perform a full mechanical inspection and insurance history check before purchase.")
