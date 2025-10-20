@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.2 (Debug Edition)
+# 🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.3 (Stable Full)
 # Elastic-Deterministic Deal Score + Flexible ROI (24m)
 # + On-screen DEBUG breakdown for Score & ROI reasoning
 # Gemini 2.5 Pro | Live Web Reasoning | Dynamic Weights | VIN/Model History | Sheets (optional)
@@ -26,8 +26,8 @@ import google.generativeai as genai
 # -------------------------------------------------------------
 # CONFIG
 # -------------------------------------------------------------
-st.set_page_config(page_title="AI Deal Checker (v9.9.2 Debug)", page_icon="🚗", layout="centered")
-st.title("🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.2")
+st.set_page_config(page_title="AI Deal Checker (v9.9.3 Stable)", page_icon="🚗", layout="centered")
+st.title("🚗 AI Deal Checker - U.S. Edition (Pro) v9.9.3")
 st.caption("Deterministic score + Flexible ROI with on-screen debug reasoning (Gemini 2.5 Pro).")
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
@@ -136,11 +136,12 @@ def get_avg_score(vin:str,model:str):
 
 def extract_price_from_text(txt:str):
     if not txt: return None
-    t = re.sub(r'\s+', '', txt)
-    m = re.search(r'[\$]?([0-9]{2,3}(?:[,][0-9]{3})+)', t)
+    t = re.sub(r'\s+', ' ', txt)
+    m = re.search(r'(?i)(?:\$?\s*)(\d{1,3}(?:,\d{3})+|\d{4,6})(?:\s*usd)?', t)
     if m:
         try:
-            return float(m.group(1).replace(',',''))
+            val = m.group(1).replace(',','')
+            return float(val)
         except:
             return None
     return None
@@ -149,6 +150,18 @@ def parse_json_safe(raw:str):
     raw=(raw or "").replace("```json","").replace("```","").strip()
     try: return json.loads(raw)
     except: return json.loads(repair_json(raw))
+
+def safe_get_ask_price(data:dict):
+    if not isinstance(data, dict): return None
+    for k in ("ask_price_usd","price_usd","asking_price","price"):
+        v = data.get(k)
+        try:
+            if v is None: 
+                continue
+            return float(str(v).replace(",","").replace("$","").strip())
+        except:
+            continue
+    return None
 
 # -------------------------------------------------------------
 # HARDENING LAYERS (Sanity + Fallback)
@@ -167,10 +180,6 @@ def safe_value(data:dict, key:str, default):
     return v
 
 def validate_model_output(data:dict, debug_lines:list):
-    """
-    Normalize suspicious outputs (score 0–10 → ×10, ROI -12500 → -12.5, etc.)
-    and ensure required blocks exist.
-    """
     if not isinstance(data, dict): data = {}
 
     # --- Normalize deal score ---
@@ -186,7 +195,7 @@ def validate_model_output(data:dict, debug_lines:list):
     elif score <= 10:
         debug_lines.append(f"deal_score: detected 0–10 scale ({score_raw}) → ×10")
         score *= 10
-    elif 10 < score <= 1000:
+    elif 300 <= score <= 1000:
         debug_lines.append(f"deal_score: detected 0–1000 scale ({score_raw}) → ÷10")
         score /= 10.0
     elif score > 1000:
@@ -225,9 +234,6 @@ def validate_model_output(data:dict, debug_lines:list):
     return data
 
 def quick_fallback_score(ad_text:str, debug_lines:list):
-    """
-    Backup score when JSON parse fails — adds reasoned notes.
-    """
     ad = (ad_text or "").lower()
     score = 50
     if "clean title" in ad or "clean carfax" in ad:
@@ -317,7 +323,7 @@ def build_components(P_ask, price_stats, mileage_stats, facts, tco_year, state_o
     debug_lines.append(f"rust: state_zip='{state_or_zip}', base={r_base}, age={age_years} → comp={rust_component}")
 
     # Rarity
-    rarity = float(facts.get("rarity_index") or 0.0)  # 0..1
+    rarity = float(facts.get("rarity_index") or 0.0)
     rarity_component = clip(50 + rarity*50, 0, 100)
     debug_lines.append(f"rarity: index={rarity} → comp={rarity_component}")
 
@@ -358,6 +364,10 @@ def calc_roi_24m_flexible(inputs:dict, debug_lines:list):
     sell_cost = float(inputs.get("sell_cost_pct") or 2)/100.0
     hold_years = float(inputs.get("hold_period") or 24)/12.0
 
+    if P_ask <= 0 or P_ask < 1000:
+        debug_lines.append(f"ROI.calc: invalid P_ask ({P_ask}), skipping ROI calc (too low)")
+        return {"expected": 0.0, "optimistic": 0.0, "pessimistic": 0.0, "confidence": 0.0}
+
     dep_eff = clip(dep + mileage_pen + own_pen - trend, 0.02, 0.25)
     P_exit = P_ask * ((1 - dep_eff)**hold_years)
     P_exit_net = P_exit * (1 - sell_cost)
@@ -370,12 +380,9 @@ def calc_roi_24m_flexible(inputs:dict, debug_lines:list):
         f"ROI.calc: dep_eff={dep_eff*100:.2f}% → P_exit={P_exit:.0f}, P_exit_net={P_exit_net:.0f}, cash_out={cash_out:.0f}, cash_in={cash_in:.0f}"
     ])
 
-    if P_ask <= 0:
-        return {"expected": 0.0, "optimistic": 0.0, "pessimistic": 0.0, "confidence": 0.5}
-
     roi_exp = 100.0 * (cash_in - cash_out)/P_ask
+    roi_exp = clip(roi_exp, -80, 60)
 
-    # uncertainty from missing
     missing_keys = [k for k in ["depreciation_brand_pct_per_year","tco_year","market_trend","mileage_factor"] if not inputs.get(k)]
     uncertainty = min(0.3 + 0.05*len(missing_keys), 0.6)
     debug_lines.append(f"ROI.uncertainty: missing={missing_keys} → u={uncertainty:.2f}")
@@ -398,12 +405,18 @@ def calc_roi_24m_flexible(inputs:dict, debug_lines:list):
 def build_prompt(ad:str, extra:str):
     return f"""
 You are a senior US used-car analyst (2023–2025).
-You MUST perform a live web lookup for comps (Cars.com, Autotrader, Edmunds). 
+You MUST perform a live web lookup for comps (Cars.com, Autotrader, Edmunds).
 If live lookup fails, set "web_search_performed": false.
 
+IMPORTANT EXTRACTION RULES:
+- Extract the ASK PRICE (USD) even if it appears only in the TITLE, with a $ sign or commas (e.g., "$26,995" → 26995).
+- Normalize numbers; return numeric fields as numbers (not strings).
+- If any numeric is missing, set 0 (not null).
+
 Return STRICT JSON with:
-{{ 
+{{
  "from_ad": {{"brand":"","model":"","year":null,"vin":"","seller_type":""}},
+ "ask_price_usd": 0,
  "price_stats": {{"median":null,"p25":null,"p75":null}},
  "mileage_stats": {{"median":null,"std":null}},
  "tco_year_usd": null,
@@ -417,7 +430,7 @@ Return STRICT JSON with:
  "confidence_level": 0.8
 }}
 
-INPUT AD:
+INPUT AD (title + description combined):
 \"\"\"{ad}\"\"\"
 {extra}
 """.strip()
@@ -498,8 +511,13 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
     except:
         age_years = 0
 
-    # price detect
-    P_ask_val = extract_price_from_text(ad) or safe_extract_price_from_data(data) or 0
+    # price detect (multi-source, robust)
+    P_ask_val = (
+        extract_price_from_text(ad)
+        or safe_extract_price_from_data(data)
+        or safe_get_ask_price(data)
+        or 0
+    )
     state_or_zip_eff = facts.get("state_or_zip") or zip_code or ""
 
     components = build_components(
@@ -577,8 +595,8 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
         "depreciation_brand_pct_per_year": dep_brand or 10,
         "tco_year": float(tco_year or 0),
         "market_trend": float(market_trend or 0),
-        "mileage_factor": float(mileage_factor*100),            # back to %
-        "ownership_cost_modifiers": float(ownership_pen*100),   # back to %
+        "mileage_factor": float(mileage_factor*100),
+        "ownership_cost_modifiers": float(ownership_pen*100),
         "sell_cost_pct": 2.0,
         "hold_period": 24
     }
@@ -638,4 +656,4 @@ if st.button("Analyze Deal",use_container_width=True,type="primary"):
                 "<br/>".join([ln.replace("→", "→").replace("<","&lt;").replace(">","&gt;") for ln in debug_lines]) +
                 "</div>", unsafe_allow_html=True)
 
-    st.caption("© 2025 AI Deal Checker v9.9.2 — Deterministic scoring + on-screen debug reasoning. AI analysis only; verify independently.")
+    st.caption("© 2025 AI Deal Checker v9.9.3 — Deterministic scoring + on-screen debug reasoning. AI analysis only; verify independently.")
