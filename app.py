@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
-# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.0.0 (Full U.S. Sync)
+# 🚗 AI Deal Checker - U.S. Edition (Pro) v10.0.1 (Adaptive Theme)
 # Consumer-weighted scoring | U.S. Market Anchors | Live Web Reasoning
 # Gemini 2.5 Pro | Sheets Integration | Insurance & Depreciation Tables
 # ===========================================================
@@ -24,8 +24,66 @@ import google.generativeai as genai
 # -------------------------------------------------------------
 # CONFIG
 # -------------------------------------------------------------
-APP_VERSION = "10.0.0"
+APP_VERSION = "10.0.1"
 st.set_page_config(page_title=f"AI Deal Checker (v{APP_VERSION})", page_icon="🚗", layout="centered")
+
+# Theme selector (Auto / Dark / Light) to mitigate MIUI forced-dark conflicts
+with st.sidebar:
+    st.markdown("### Appearance")
+    theme_choice = st.radio("Theme", ["Auto", "Dark", "Light"], index=0, horizontal=True,
+                            help="Auto follows system theme. Use Light if text looks too dim on Xiaomi/MIUI.")
+    st.caption("If text looks gray-on-black on Xiaomi/MIUI, switch to **Light**.")
+
+def inject_theme(choice:str):
+    # Define CSS tokens for light/dark
+    if choice == "Dark":
+        bg = "#0b0f14"
+        fg = "#e9eef2"
+        card = "#11161c"
+        border = "#1f2a37"
+    elif choice == "Light":
+        bg = "#ffffff"
+        fg = "#0f172a"
+        card = "#ffffff"
+        border = "#e5e7eb"
+    else:
+        # Auto: rely on prefers-color-scheme, but set strong foreground to avoid MIUI dimming
+        bg = "Canvas"           # lets browser choose
+        fg = "CanvasText"       # high-contrast system color
+        card = "Field"
+        border = "#e5e7eb"
+
+    st.markdown(f"""
+    <style>
+    /* Help browsers choose the right color scheme and resist MIUI forced dark */
+    :root {{ color-scheme: light dark; }}
+    html, body {{ background: {bg} !important; }}
+    /* Strong text color to avoid Xiaomi forced-dark low contrast */
+    body, .stMarkdown, .stText, p, label, div, span, code, h1, h2, h3, h4, h5, h6 {{
+        color: {fg} !important;
+        -webkit-text-stroke: 0 transparent;
+        text-shadow: none;
+    }}
+    .card {{ background:{card}; border:1px solid {border}; border-radius:12px; padding:12px; }}
+    .section {{ margin-top:12px; }}
+    .metric {{ display:flex; align-items:center; justify-content:space-between; margin:6px 0; font-size:0.95rem; }}
+    .progress {{ height:10px; background:#e5e7eb33; border-radius:6px; overflow:hidden; }}
+    .fill-ok{{background:#16a34a;height:100%;}}
+    .fill-warn{{background:#f59e0b;height:100%;}}
+    .fill-bad{{background:#dc2626;height:100%;}}
+    small.muted{{color:#6b7280;}}
+    hr{{border:none;border-top:1px solid #e5e7eb33;margin:18px 0;}}
+    .expl {{font-size:0.98rem; line-height:1.4;}}
+    .expl p{{margin:6px 0;}}
+    .badge {{ display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; background:#eef2ff22; border:1px solid {border}; }}
+    .badge.warn {{ background:#fff7ed22; }}
+    .badge.err {{ background:#fee2e222; }}
+    .kpi {{ font-weight:600; }}
+    </style>
+    """, unsafe_allow_html=True)
+
+inject_theme(theme_choice)
+
 st.title(f"🚗 AI Deal Checker - U.S. Edition (Pro) v{APP_VERSION}")
 st.caption("Full U.S. Sync: KBB / CarEdge / RepairPal / IIHS data anchors, rust-belt awareness, insurance cost modeling, and ROI forecasting (Gemini 2.5 Pro).")
 
@@ -57,29 +115,6 @@ if SHEET_ID and SERVICE_JSON and gspread and Credentials:
         st.warning(f"⚠️ Sheets connection failed: {e}")
 
 # -------------------------------------------------------------
-# STYLE
-# -------------------------------------------------------------
-st.markdown("""
-<style>
-:root { --ok:#16a34a; --warn:#f59e0b; --bad:#dc2626; --muted:#6b7280; }
-.metric { display:flex; align-items:center; justify-content:space-between; margin:6px 0; font-size:0.95rem; }
-.progress { height:10px; background:#e5e7eb; border-radius:6px; overflow:hidden; }
-.fill-ok{background:var(--ok);height:100%;}
-.fill-warn{background:var(--warn);height:100%;}
-.fill-bad{background:var(--bad);height:100%;}
-small.muted{color:var(--muted);}
-.section {margin-top:12px;}
-hr{border:none;border-top:1px solid #e5e7eb;margin:18px 0;}
-.expl {font-size:0.98rem; line-height:1.4;}
-.expl p{margin:6px 0;}
-.card {border:1px solid #e5e7eb; border-radius:10px; padding:12px; background:#fff;}
-.badge { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; background:#eef2ff; }
-.badge.warn { background:#fff7ed; }
-.badge.err { background:#fee2e2; }
-</style>
-""", unsafe_allow_html=True)
-
-# -------------------------------------------------------------
 # U.S.-SPECIFIC TABLES
 # -------------------------------------------------------------
 RUST_BELT_STATES = {"IL","MI","OH","WI","PA","NY","MN","IN","MA","NJ"}
@@ -103,7 +138,7 @@ def meter(label, value, suffix=""):
         v = 0
     v = max(0, min(100, v))
     css = 'fill-ok' if v >= 70 else ('fill-warn' if v >= 40 else 'fill-bad')
-    st.markdown(f"<div class='metric'><b>{html.escape(str(label))}</b><span>{int(v)}{html.escape(str(suffix))}</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric'><b>{html.escape(str(label))}</b><span class='kpi'>{int(v)}{html.escape(str(suffix))}</span></div>", unsafe_allow_html=True)
     st.markdown(f"<div class='progress'><div class='{css}' style='width:{v}%'></div></div>", unsafe_allow_html=True)
 
 def clip(x, lo, hi):
@@ -351,10 +386,10 @@ with c3: seller = st.selectbox("Seller type", ["","private","dealer"])
 
 def build_extra(vin, zip_code, seller, imgs):
     extra = ""
-    if vin: extra += f"\\nVIN: {vin}"
-    if zip_code: extra += f"\\nZIP/State: {zip_code}"
-    if seller: extra += f"\\nSeller: {seller}"
-    if imgs: extra += f"\\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
+    if vin: extra += f"\nVIN: {vin}"
+    if zip_code: extra += f"\nZIP/State: {zip_code}"
+    if seller: extra += f"\nSeller: {seller}"
+    if imgs: extra += f"\nPhotos provided: {len(imgs)} file(s) (content parsed by model if supported)."
     return extra
 
 # -------------------------------------------------------------
@@ -470,7 +505,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
     if re.fullmatch(r"[A-Z]{2}", state_or_zip):
         state_code = state_or_zip
     elif re.fullmatch(r"\d{5}", state_or_zip):
-        state_code = ""  # ZIP to state mapping not available offline
+        state_code = ""  # offline
 
     if state_code in RUST_BELT_STATES:
         final_score = round(final_score - 1.5, 1)
@@ -495,7 +530,7 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
         note = c.get("note","")
         try:
             comp_lines.append(explain_component(name, score, note, ctx=ctx_for_exp))
-        except Exception as e:
+        except Exception:
             comp_lines.append(f"{name.capitalize()} — {int(clip(score,0,100))}/100")
 
     # ---- Classification
@@ -597,4 +632,4 @@ if st.button("Analyze Deal", use_container_width=True, type="primary"):
 
     # ---- Session summary (bottom footer)
     st.markdown("<hr>", unsafe_allow_html=True)
-    st.caption(f"AI Deal Checker — U.S. Edition (Pro) v{APP_VERSION} © 2025 | Gemini 2.5 Pro | Deterministic Mode | All rights reserved.")
+    st.caption(f"AI Deal Checker — U.S. Edition (Pro) v{APP_VERSION} © 2025 | Gemini 2.5 Pro | Adaptive Theme Edition")
